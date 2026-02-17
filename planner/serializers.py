@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from models import Course, Activity, Subtask, ReprogrammingLog
+from .models import Course, Activity, Subtask, ReprogrammingLog
 
 class CourseSerializer(serializers.ModelSerializer):
     class Meta:

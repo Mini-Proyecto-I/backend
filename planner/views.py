@@ -2,8 +2,8 @@ from django.shortcuts import render
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from models import Course, Activity, Subtask, ReprogrammingLog
-from serializers import CourseSerializer, ActivitySerializer, SubtaskSerializer, ReprogrammingLogSerializer
+from .models import Course, Activity, Subtask, ReprogrammingLog
+from .serializers import CourseSerializer, ActivitySerializer, SubtaskSerializer, ReprogrammingLogSerializer
 
 # Create your views here.
 

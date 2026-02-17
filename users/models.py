@@ -9,9 +9,11 @@ class UserManager(AuthUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError("El correo electrónico es obligatorio.")
+
         email = self.normalize_email(email)
         extra_fields.setdefault("username", email)
-        return super().create_user(username=email, email=email, password=password, **extra_fields)
+
+        return super().create_user(email=email, password=password, **extra_fields)
 
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
@@ -35,9 +37,9 @@ class User(AbstractUser):
         "límite de horas diarias",
         max_digits=4,
         decimal_places=2,
-        default=8.0,
+        default=6.0,
         validators=[MinValueValidator(0.5), MaxValueValidator(24.0)],
-        help_text="Horas de estudio configuradas para planificar tareas (0.5–24).",
+        help_text="Horas de estudio configuradas para planificar tareas (1-16).",
     )
 
     objects = UserManager()
