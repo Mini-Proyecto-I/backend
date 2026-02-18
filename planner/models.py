@@ -33,7 +33,7 @@ class Subtask(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="subtaskts")
     title = models.CharField(max_length=100, blank=False, null=False)
-    activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name="subtaskts")
+    activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name="subtasks")
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDIENTE)
     estimated_hours = models.DecimalField(max_digits=4, decimal_places=2, default=0.0)
     target_date = models.DateField(null=True, blank=True)

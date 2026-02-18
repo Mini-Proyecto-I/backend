@@ -10,7 +10,7 @@ class ActivitySerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
     class Meta:
         model = Activity
-        fields = ["id", "title", "description", "course", 
+        fields = ["id", "title", "description", "course", "course_id"
                   "created_at", "event_datetime", "deadline"]
         
 class SubtaskSerializer(serializers.ModelSerializer):
