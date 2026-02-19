@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -94,6 +95,13 @@ DATABASES = {
         "PORT": os.getenv("DB_PORT"),
     }
 }
+
+# En tests usar SQLite en memoria (no requiere Postgres ni confirmaciones)
+if "test" in sys.argv:
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+    }
 
 
 
