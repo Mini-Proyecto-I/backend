@@ -1,11 +1,22 @@
 services:
   backend:
     build: .
+    image: django_backend:latest
     container_name: django_backend
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    # Migrar solo si RUN_MIGRATE=1 (por defecto en primer arranque). Para arranques rápidos: RUN_MIGRATE=0
+    command: >
+      sh -c "
+        if [ \"$${RUN_MIGRATE:-1}\" = '1' ]; then
+          echo 'Running migrations...' && python manage.py migrate --noinput;
+        fi &&
+        exec python manage.py runserver 0.0.0.0:8000
+      "
+    restart: unless-stopped

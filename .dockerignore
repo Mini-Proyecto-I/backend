@@ -1,0 +1,45 @@
+# Virtual env y Python
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+.eggs
+dist
+build
+
+# Git e IDE
+.git
+.gitignore
+.cursor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Entorno y secretos (usa env_file en compose)
+.env
+.env.*
+!.env.example
+
+# Tests y cobertura
+.pytest_cache
+.coverage
+htmlcov
+.tox
+
+# Docker (evitar contexto innecesario)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Docs y misc
+*.md
+*.txt
+!requirements.txt
