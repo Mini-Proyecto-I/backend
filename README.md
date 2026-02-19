@@ -39,6 +39,7 @@ Para levantar el entorno de desarrollo de forma local (incluyendo base de datos,
    cd backend-planner
 
 2. **Levantar los servicios**
-    ```docker compose up --build
+    ```bash
+    docker compose up --build
 
 El servidor estará escuchando en http://localhost:8000.
