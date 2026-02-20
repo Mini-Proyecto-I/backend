@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'users',
     'planner',
     'corsheaders',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -157,4 +158,15 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Planner API',
+    'DESCRIPTION': 'API documentation for Planner project',
+    'VERSION': '1.0.0',
+}
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+]
