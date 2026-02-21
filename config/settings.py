@@ -61,7 +61,18 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = os.getenv("DEBUG", "True") == "True"
+CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://frontend-five-lemon-73.vercel.app",
+]
+
+# Opcional: permite previews de Vercel (*.vercel.app)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
 
 ROOT_URLCONF = 'config.urls'
 
@@ -166,9 +177,3 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API documentation for Planner project',
     'VERSION': '1.0.0',
 }
-
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "https://frontend-five-lemon-73.vercel.app",
-    "https://frontend-five-lemon-73.vercel.app/hoy",
-]
