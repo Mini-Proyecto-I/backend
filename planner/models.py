@@ -2,6 +2,8 @@ from django.db import models
 from django.conf import settings
 from uuid import uuid4
 
+from django.utils.http import MAX_URL_LENGTH
+
 class Course(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True, blank=False, null=False)
@@ -10,6 +12,13 @@ class Course(models.Model):
         return self.name
 
 class Activity(models.Model):
+    class Type(models.TextChoices):
+        EXAMEN = "EXAMEN", "examen"
+        QUIZ = "QUIZ", "quiz"
+        TALLER = "TALLER", "taller"
+        PROYECTO = "PROYECTO", "proyecto"
+        OTRO = "OTRO", "otro"
+    
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="activities")
     title = models.CharField(max_length=100, unique=True, blank=False, null=False)
@@ -18,6 +27,7 @@ class Activity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     event_datetime = models.DateTimeField(null=True, blank=True)
     deadline = models.DateField(null=True, blank=True)
+    type = models.CharField(max_length=10, choices=Type.choices, default=Type.TALLER)
     
     def __str__(self):
         return self.title
