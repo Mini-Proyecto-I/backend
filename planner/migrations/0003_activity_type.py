@@ -6,11 +6,11 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('planner', '0002_alter_subtask_activity'),
+        ('planner', '0001_initial'),
     ]
 
     operations = [
-        migrations.AddField(
+        migrations.AlterField(
             model_name='activity',
             name='type',
             field=models.CharField(choices=[('EXAMEN', 'examen'), ('QUIZ', 'quiz'), ('TALLER', 'taller'), ('PROYECTO', 'proyecto'), ('OTRO', 'otro')], default='TALLER', max_length=10),

@@ -3,10 +3,37 @@ from rest_framework.validators import UniqueValidator
 from .models import Course, Activity, Subtask, ReprogrammingLog
 from django.utils import timezone
 
+
 class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
-        fields = ["id", "name"]
+        fields = ["id", "name", "user"]
+        extra_kwargs = {
+            # Permitimos no enviar user en el body; si no viene, se asigna uno por defecto.
+            "user": {"required": False, "write_only": True},
+        }
+
+    def create(self, validated_data):
+        """
+        Permite crear cursos sin enviar explícitamente el usuario.
+        - Si se pasa user en el body, se usa ese.
+        - Si no, se intenta usar el primer usuario existente.
+        - Si no hay usuarios, se crea uno por defecto.
+        """
+        user = validated_data.get("user")
+        if user is None:
+            from django.contrib.auth import get_user_model
+
+            User = get_user_model()
+            user = User.objects.first()
+            if user is None:
+                user = User.objects.create_user(
+                    email="default@system.local",
+                    password="default123",
+                    name="Default User",
+                )
+        validated_data["user"] = user
+        return super().create(validated_data)
 
 class ActivitySerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
@@ -31,11 +58,25 @@ class ActivitySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Activity
-        fields = ["id", "title", "description", "course", "course_id",
-                  "user", "created_at", "event_datetime", "deadline"]
+        fields = [
+            "id",
+            "title",
+            "description",
+            "course",
+            "course_id",
+            "user",
+            "created_at",
+            "event_datetime",
+            "deadline",
+            "type",
+        ]
         extra_kwargs = {
+            # En los tests y en el frontend se envía el user en el body.
             "user": {"required": True},
             "title": {"required": True},
+            # Hacemos que type no sea obligatorio para no romper tests existentes
+            # y permitir que se use el valor por defecto si no se envía.
+            "type": {"required": False},
         }
         
         #Validacion titulo
