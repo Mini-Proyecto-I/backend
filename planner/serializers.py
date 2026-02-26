@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 from .models import Course, Activity, Subtask, ReprogrammingLog
 from django.utils import timezone
 
@@ -9,7 +10,24 @@ class CourseSerializer(serializers.ModelSerializer):
 
 class ActivitySerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
-    course_id = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), write_only=True, required=False, allow_null=True)
+    course_id = serializers.PrimaryKeyRelatedField(
+        queryset=Course.objects.all(),
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
+    title = serializers.CharField(
+        max_length=100,
+        required=True,
+        allow_blank=False,
+        trim_whitespace=False,
+        validators=[
+            UniqueValidator(
+                queryset=Activity.objects.all(),
+                message="Ya existe una actividad con este título.",
+            )
+        ],
+    )
 
     class Meta:
         model = Activity
@@ -17,12 +35,12 @@ class ActivitySerializer(serializers.ModelSerializer):
                   "user", "created_at", "event_datetime", "deadline"]
         extra_kwargs = {
             "user": {"required": True},
-            "title": {"required": True, "allow_blank": False}
-            }
+            "title": {"required": True},
+        }
         
         #Validacion titulo
     def validate_title(self, value):
-        if not value.strip():
+        if not value or not value.strip():
             raise serializers.ValidationError("El título no puede estar vacío.")
         return value
     
@@ -55,6 +73,12 @@ class ActivitySerializer(serializers.ModelSerializer):
 class SubtaskSerializer(serializers.ModelSerializer):
     activity = ActivitySerializer(read_only=True)
     activity_id = serializers.PrimaryKeyRelatedField(queryset=Activity.objects.all(), write_only=True)
+    title = serializers.CharField(
+        max_length=100,
+        required=True,
+        allow_blank=False,
+        trim_whitespace=False,
+    )
 
     class Meta:
         model = Subtask
@@ -62,11 +86,11 @@ class SubtaskSerializer(serializers.ModelSerializer):
                   "target_date", "order", "is_conflicted", "execution_note"]
         extra_kwargs = {
             "user": {"required": True},
-            "title": {"required": True, "allow_blank": False}
+            "title": {"required": True},
         }
 
     def validate_title(self, value):
-        if not value.strip():
+        if not value or not value.strip():
             raise serializers.ValidationError("El título de la subtarea no puede estar vacío.")
         return value
     
