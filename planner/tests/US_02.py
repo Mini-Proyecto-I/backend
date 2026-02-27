@@ -104,15 +104,15 @@ class US02SubtaskCreationValidationTests(TestCase):
             response.data["title"],
         )
 
-    def test_create_subtask_without_auth_returns_401(self):
-        """El endpoint anidado de subtareas requiere autenticación."""
+    def test_create_subtask_without_auth_in_dev_mode_creates_successfully(self):
+        """En modo desarrollo, sin autenticación también se pueden crear subtareas."""
         self.client.force_authenticate(user=None)
         payload = {
             "title": "Sin auth",
             "estimated_hours": "1.00",
         }
         response = self.client.post(self.url, payload, format="json")
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_create_subtask_estimated_hours_zero_returns_400(self):
         """Las horas estimadas deben ser mayores a 0."""

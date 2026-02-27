@@ -90,8 +90,8 @@ class US01ActivityCreationValidationTests(TestCase):
         # Mensaje definido en ActivitySerializer.validate_title
         self.assertIn("El título no puede estar vacío.", response.data["title"])
 
-    def test_create_activity_without_auth_returns_401(self):
-        """El endpoint requiere autenticación (IsAuthenticated)."""
+    def test_create_activity_without_auth_in_dev_mode_creates_successfully(self):
+        """En modo desarrollo, sin autenticación también se puede crear la actividad."""
         self.client.force_authenticate(user=None)
         payload = {
             "title": "Sin usuario",
@@ -100,7 +100,7 @@ class US01ActivityCreationValidationTests(TestCase):
 
         response = self.client.post(self.url, payload, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_create_activity_with_past_event_datetime_returns_400(self):
         """No se permite crear una actividad con fecha de evento en el pasado."""

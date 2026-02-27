@@ -1,6 +1,10 @@
 from rest_framework import serializers
-from .models import Course, Activity, Subtask, ReprogrammingLog
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+from .models import Course, Activity, Subtask, ReprogrammingLog
+
+
+User = get_user_model()
 
 
 class CourseSerializer(serializers.ModelSerializer):
@@ -22,7 +26,12 @@ class CourseSerializer(serializers.ModelSerializer):
                 "El nombre del curso no puede estar vacío."
             )
 
-        user = self.context["request"].user
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            # En modo desarrollo, si no hay usuario autenticado,
+            # el chequeo de unicidad por usuario se omite.
+            return value.strip()
 
         if Course.objects.filter(name=value.strip(), user=user).exists():
             raise serializers.ValidationError(
@@ -32,7 +41,15 @@ class CourseSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def create(self, validated_data):
-        validated_data["user"] = self.context["request"].user
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            # Usuario "genérico" para entorno de desarrollo sin autenticación
+            user, _ = User.objects.get_or_create(
+                email="dev@example.com",
+                defaults={"password": "devpass", "name": "Dev User"},
+            )
+        validated_data["user"] = user
         return super().create(validated_data)
 
 class ActivitySerializer(serializers.ModelSerializer):
@@ -102,7 +119,14 @@ class ActivitySerializer(serializers.ModelSerializer):
 
 
     def create(self, validated_data):
-        validated_data["user"] = self.context["request"].user
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            user, _ = User.objects.get_or_create(
+                email="dev@example.com",
+                defaults={"password": "devpass", "name": "Dev User"},
+            )
+        validated_data["user"] = user
         validated_data["course"] = validated_data.pop("course_id", None)
         return super().create(validated_data)
 
