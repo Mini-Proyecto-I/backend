@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import *
 
+
 router = DefaultRouter()
 router.register(r'course', CourseViewSet, basename='course')
 router.register(r'activity', ActivityViewSet, basename='activity')
