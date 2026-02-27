@@ -5,13 +5,32 @@ from django.utils import timezone
 
 
 class CourseSerializer(serializers.ModelSerializer):
+
+    name = serializers.CharField(
+        max_length=200,
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True
+    )
+
     class Meta:
         model = Course
         fields = ["id", "name"]
-        extra_kwargs = {
-            # Permitimos no enviar user en el body; si no viene, se asigna uno por defecto.
-            "user": {"required": False, "write_only": True},
-        }
+
+    def validate_name(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                "El nombre del curso no puede estar vacío."
+            )
+
+        user = self.context["request"].user
+
+        if Course.objects.filter(name=value.strip(), user=user).exists():
+            raise serializers.ValidationError(
+                "Ya tienes un curso con ese nombre."
+            )
+
+        return value.strip()
 
     def create(self, validated_data):
         validated_data["user"] = self.context["request"].user
