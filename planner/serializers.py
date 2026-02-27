@@ -95,42 +95,37 @@ class ActivitySerializer(serializers.ModelSerializer):
 
 class SubtaskSerializer(serializers.ModelSerializer):
     activity = ActivitySerializer(read_only=True)
-    activity_id = serializers.PrimaryKeyRelatedField(queryset=Activity.objects.all(), write_only=True)
+
     title = serializers.CharField(
         max_length=100,
         required=True,
         allow_blank=False,
-        trim_whitespace=False,
+        trim_whitespace=True,
     )
 
     class Meta:
         model = Subtask
-        fields = ["id", "title", "activity", "activity_id", "user", "status", "estimated_hours",
-                  "target_date", "order", "is_conflicted", "execution_note"]
-        extra_kwargs = {
-            "user": {"read_only": True},
-            "title": {"required": True},
-        }
+        fields = [
+            "id", "title", "activity", "status", "estimated_hours", 
+            "target_date", "order", "is_conflicted", "execution_note"
+        ]
+        read_only_fields = ["id", "activity"]
 
     def validate_title(self, value):
-        if not value or not value.strip():
-            raise serializers.ValidationError("El título de la subtarea no puede estar vacío.")
+        if not value.strip():
+            raise serializers.ValidationError(
+                "El título de la subtarea no puede estar vacío."
+            )
         return value
-    
+
     def validate_estimated_hours(self, value):
         if value <= 0:
-            raise serializers.ValidationError("Las horas estimadas deben ser mayores a 0.")
+            raise serializers.ValidationError(
+                "Las horas estimadas deben ser mayores a 0."
+            )
         return value
 
-    def create(self, validated_data):
-        validated_data["activity"] = validated_data.pop("activity_id")
-        validated_data["user"] = self.context["request"].user
-        return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        if "activity_id" in validated_data:
-            validated_data["activity"] = validated_data.pop("activity_id")
-        return super().update(instance, validated_data)
+    # Quita el create/update que usaba activity_id
 
 
 class ReprogrammingLogSerializer(serializers.ModelSerializer):
