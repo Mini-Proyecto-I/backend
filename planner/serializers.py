@@ -1,7 +1,10 @@
 from rest_framework import serializers
-from rest_framework.validators import UniqueValidator
-from .models import Course, Activity, Subtask, ReprogrammingLog
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+from .models import Course, Activity, Subtask, ReprogrammingLog
+
+
+User = get_user_model()
 
 
 class CourseSerializer(serializers.ModelSerializer):
@@ -23,7 +26,12 @@ class CourseSerializer(serializers.ModelSerializer):
                 "El nombre del curso no puede estar vacío."
             )
 
-        user = self.context["request"].user
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            # En modo desarrollo, si no hay usuario autenticado,
+            # el chequeo de unicidad por usuario se omite.
+            return value.strip()
 
         if Course.objects.filter(name=value.strip(), user=user).exists():
             raise serializers.ValidationError(
@@ -33,11 +41,25 @@ class CourseSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def create(self, validated_data):
-        validated_data["user"] = self.context["request"].user
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            # Usuario "genérico" para entorno de desarrollo sin autenticación
+            user, _ = User.objects.get_or_create(
+                email="dev@example.com",
+                defaults={"password": "devpass", "name": "Dev User"},
+            )
+        validated_data["user"] = user
         return super().create(validated_data)
 
 class ActivitySerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
+    title = serializers.CharField(
+        max_length=100,
+        required=True,
+        allow_blank=True,
+        trim_whitespace=False,
+    )
     course_id = serializers.PrimaryKeyRelatedField(
         queryset=Course.objects.all(),
         write_only=True,
@@ -60,30 +82,51 @@ class ActivitySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
 
-        #Validacion titulo
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["course_id"].queryset = Course.objects.filter(user=user)
+
+    #Validacion titulo
     def validate_title(self, value):
         if not value or not value.strip():
             raise serializers.ValidationError("El título no puede estar vacío.")
-        return value
+        return value.strip()
     
     #Validación global
     def validate(self, data):
         event_datetime = data.get("event_datetime")
         deadline = data.get("deadline")
+
         if event_datetime and event_datetime < timezone.now():
             raise serializers.ValidationError({
                 "event_datetime": "La fecha de la actividad no puede ser anterior a la actual."
             })
-        if event_datetime and deadline:
-            if deadline < event_datetime.date():
-                raise serializers.ValidationError({
-                    "deadline": "La fecha límite de la actividad no puede ser anterior a la actual."
+
+        if deadline and deadline < timezone.localdate():
+            raise serializers.ValidationError({
+                "deadline": "La fecha límite de la actividad no puede ser anterior a la actual."
             })
+
+        if event_datetime and deadline and deadline < event_datetime.date():
+            raise serializers.ValidationError({
+                "deadline": "La fecha límite no puede ser anterior a la fecha del evento."
+            })
+
         return data
 
 
     def create(self, validated_data):
-        validated_data["user"] = self.context["request"].user
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):
+            user, _ = User.objects.get_or_create(
+                email="dev@example.com",
+                defaults={"password": "devpass", "name": "Dev User"},
+            )
+        validated_data["user"] = user
         validated_data["course"] = validated_data.pop("course_id", None)
         return super().create(validated_data)
 
@@ -99,8 +142,8 @@ class SubtaskSerializer(serializers.ModelSerializer):
     title = serializers.CharField(
         max_length=100,
         required=True,
-        allow_blank=False,
-        trim_whitespace=True,
+        allow_blank=True,
+        trim_whitespace=False,
     )
 
     class Meta:
@@ -112,11 +155,11 @@ class SubtaskSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "activity"]
 
     def validate_title(self, value):
-        if not value.strip():
+        if not value or not value.strip():
             raise serializers.ValidationError(
                 "El título de la subtarea no puede estar vacío."
             )
-        return value
+        return value.strip()
 
     def validate_estimated_hours(self, value):
         if value <= 0:
