@@ -6,25 +6,25 @@ from django.utils.http import MAX_URL_LENGTH
 
 class Course(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
-    name = models.CharField(max_length=200, unique=True)
+    name = models.CharField(max_length=200)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="cursos"
     )
 
-    def __str__(self):
-        return self.name
+    class Meta:
+        unique_together = ("name", "user")
     
 
 class Activity(models.Model):
-    class Type(models.TextChoices):
-        EXAMEN = "EXAMEN", "examen"
-        QUIZ = "QUIZ", "quiz"
-        TALLER = "TALLER", "taller"
-        PROYECTO = "PROYECTO", "proyecto"
-        OTRO = "OTRO", "otro"
-    
+    class TypeChoices(models.TextChoices):
+        EXAMEN = "examen", "Examen"
+        QUIZ = "quiz", "Quiz"
+        TALLER = "taller", "Taller"
+        PROYECTO = "proyecto", "Proyecto"
+        OTRO = "otro", "Otro"
+        
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="activities")
     title = models.CharField(max_length=100, unique=False, blank=False, null=False)
@@ -33,17 +33,8 @@ class Activity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     event_datetime = models.DateTimeField(null=True, blank=True)
     deadline = models.DateField(null=True, blank=True)
-    class TypeChoices(models.TextChoices):
-        EXAMEN = "examen", "Examen"
-        QUIZ = "quiz", "Quiz"
-        TALLER = "taller", "Taller"
-        PROYECTO = "proyecto", "Proyecto"
-        OTRO = "otro", "Otro"
-
-    type = models.CharField(
-        max_length=20,
-        choices=TypeChoices.choices
-    )
+    type = models.CharField(max_length=20, choices=TypeChoices.choices)
+    
     def __str__(self):
         return self.title
     
