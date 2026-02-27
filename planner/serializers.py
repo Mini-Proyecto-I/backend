@@ -1,5 +1,4 @@
 from rest_framework import serializers
-from rest_framework.validators import UniqueValidator
 from .models import Course, Activity, Subtask, ReprogrammingLog
 from django.utils import timezone
 
@@ -38,6 +37,12 @@ class CourseSerializer(serializers.ModelSerializer):
 
 class ActivitySerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
+    title = serializers.CharField(
+        max_length=100,
+        required=True,
+        allow_blank=True,
+        trim_whitespace=False,
+    )
     course_id = serializers.PrimaryKeyRelatedField(
         queryset=Course.objects.all(),
         write_only=True,
@@ -60,25 +65,39 @@ class ActivitySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
 
-        #Validacion titulo
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["course_id"].queryset = Course.objects.filter(user=user)
+
+    #Validacion titulo
     def validate_title(self, value):
         if not value or not value.strip():
             raise serializers.ValidationError("El título no puede estar vacío.")
-        return value
+        return value.strip()
     
     #Validación global
     def validate(self, data):
         event_datetime = data.get("event_datetime")
         deadline = data.get("deadline")
+
         if event_datetime and event_datetime < timezone.now():
             raise serializers.ValidationError({
                 "event_datetime": "La fecha de la actividad no puede ser anterior a la actual."
             })
-        if event_datetime and deadline:
-            if deadline < event_datetime.date():
-                raise serializers.ValidationError({
-                    "deadline": "La fecha límite de la actividad no puede ser anterior a la actual."
+
+        if deadline and deadline < timezone.localdate():
+            raise serializers.ValidationError({
+                "deadline": "La fecha límite de la actividad no puede ser anterior a la actual."
             })
+
+        if event_datetime and deadline and deadline < event_datetime.date():
+            raise serializers.ValidationError({
+                "deadline": "La fecha límite no puede ser anterior a la fecha del evento."
+            })
+
         return data
 
 
@@ -99,8 +118,8 @@ class SubtaskSerializer(serializers.ModelSerializer):
     title = serializers.CharField(
         max_length=100,
         required=True,
-        allow_blank=False,
-        trim_whitespace=True,
+        allow_blank=True,
+        trim_whitespace=False,
     )
 
     class Meta:
@@ -112,11 +131,11 @@ class SubtaskSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "activity"]
 
     def validate_title(self, value):
-        if not value.strip():
+        if not value or not value.strip():
             raise serializers.ValidationError(
                 "El título de la subtarea no puede estar vacío."
             )
-        return value
+        return value.strip()
 
     def validate_estimated_hours(self, value):
         if value <= 0:
