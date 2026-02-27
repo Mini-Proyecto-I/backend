@@ -99,6 +99,28 @@ class ActivitySerializer(serializers.ModelSerializer):
     def validate(self, data):
         event_datetime = data.get("event_datetime")
         deadline = data.get("deadline")
+        title = data.get("title", getattr(self.instance, "title", None))
+        # Nota: en este serializer el campo de escritura es course_id (PKRelatedField)
+        course = data.get("course_id", getattr(self.instance, "course", None))
+
+        # Resolver usuario (en dev sin auth usamos el usuario genérico)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not getattr(user, "is_authenticated", False):    
+            user, _ = User.objects.get_or_create(
+                email="dev@example.com",
+                defaults={"password": "devpass", "name": "Dev User"},
+            )
+
+        # Evitar duplicados: mismo curso + mismo título (por usuario)
+        if course and title and str(title).strip():
+            qs = Activity.objects.filter(user=user, course=course, title__iexact=str(title).strip())
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {"title": "Ya existe una actividad con este título en el curso seleccionado."}
+                )
 
         if event_datetime and event_datetime < timezone.now():
             raise serializers.ValidationError({
