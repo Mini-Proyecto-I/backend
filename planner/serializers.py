@@ -7,32 +7,14 @@ from django.utils import timezone
 class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
-        fields = ["id", "name", "user"]
+        fields = ["id", "name"]
         extra_kwargs = {
             # Permitimos no enviar user en el body; si no viene, se asigna uno por defecto.
             "user": {"required": False, "write_only": True},
         }
 
     def create(self, validated_data):
-        """
-        Permite crear cursos sin enviar explícitamente el usuario.
-        - Si se pasa user en el body, se usa ese.
-        - Si no, se intenta usar el primer usuario existente.
-        - Si no hay usuarios, se crea uno por defecto.
-        """
-        user = validated_data.get("user")
-        if user is None:
-            from django.contrib.auth import get_user_model
-
-            User = get_user_model()
-            user = User.objects.first()
-            if user is None:
-                user = User.objects.create_user(
-                    email="default@system.local",
-                    password="default123",
-                    name="Default User",
-                )
-        validated_data["user"] = user
+        validated_data["user"] = self.context["request"].user
         return super().create(validated_data)
 
 class ActivitySerializer(serializers.ModelSerializer):
@@ -43,18 +25,6 @@ class ActivitySerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
-    title = serializers.CharField(
-        max_length=100,
-        required=True,
-        allow_blank=False,
-        trim_whitespace=False,
-        validators=[
-            UniqueValidator(
-                queryset=Activity.objects.all(),
-                message="Ya existe una actividad con este título.",
-            )
-        ],
-    )
 
     class Meta:
         model = Activity
@@ -64,21 +34,13 @@ class ActivitySerializer(serializers.ModelSerializer):
             "description",
             "course",
             "course_id",
-            "user",
+            "type",
             "created_at",
             "event_datetime",
             "deadline",
-            "type",
         ]
-        extra_kwargs = {
-            # En los tests y en el frontend se envía el user en el body.
-            "user": {"required": True},
-            "title": {"required": True},
-            # Hacemos que type no sea obligatorio para no romper tests existentes
-            # y permitir que se use el valor por defecto si no se envía.
-            "type": {"required": False},
-        }
-        
+        read_only_fields = ["id", "created_at"]
+
         #Validacion titulo
     def validate_title(self, value):
         if not value or not value.strip():
@@ -102,6 +64,7 @@ class ActivitySerializer(serializers.ModelSerializer):
 
 
     def create(self, validated_data):
+        validated_data["user"] = self.context["request"].user
         validated_data["course"] = validated_data.pop("course_id", None)
         return super().create(validated_data)
 
@@ -126,7 +89,7 @@ class SubtaskSerializer(serializers.ModelSerializer):
         fields = ["id", "title", "activity", "activity_id", "user", "status", "estimated_hours",
                   "target_date", "order", "is_conflicted", "execution_note"]
         extra_kwargs = {
-            "user": {"required": True},
+            "user": {"read_only": True},
             "title": {"required": True},
         }
 
@@ -142,6 +105,7 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data["activity"] = validated_data.pop("activity_id")
+        validated_data["user"] = self.context["request"].user
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
