@@ -185,7 +185,32 @@ class SubtaskSerializer(serializers.ModelSerializer):
             )
         return value
 
-    # Quita el create/update que usaba activity_id
+    def validate(self, data):
+        request = self.context.get("request")
+        view = self.context.get("view")
+
+        # Obtener activity desde la URL
+        activity_id = view.kwargs.get("activity_pk") if view else None
+        activity = None
+
+        if activity_id:
+            activity = Activity.objects.filter(id=activity_id).first()
+        elif self.instance:
+            activity = self.instance.activity
+
+        target_date = data.get("target_date", getattr(self.instance, "target_date", None))
+
+        if target_date and activity:
+            if activity.deadline and target_date > activity.deadline:
+                raise serializers.ValidationError({
+                    "target_date": "La fecha de la subtarea no puede ser posterior a la fecha límite de la actividad."
+            })
+            if activity.event_datetime and target_date > activity.event_datetime.date():
+                raise serializers.ValidationError({
+                "target_date": "La fecha de la subtarea no puede ser posterior a la fecha del evento."
+            })
+
+        return data
 
 
 class ReprogrammingLogSerializer(serializers.ModelSerializer):
