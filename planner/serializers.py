@@ -132,11 +132,6 @@ class ActivitySerializer(serializers.ModelSerializer):
                 "deadline": "La fecha límite de la actividad no puede ser anterior a la actual."
             })
 
-        if event_datetime and deadline and deadline < event_datetime.date():
-            raise serializers.ValidationError({
-                "deadline": "La fecha límite no puede ser anterior a la fecha del evento."
-            })
-
         return data
 
 
