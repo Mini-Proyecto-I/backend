@@ -26,24 +26,24 @@ class US02SubtaskCreationValidationTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.url = "/api/subtask/"
         self.user = User.objects.create_user(
             email="us02@test.com",
             password="pass",
             name="Usuario US02",
         )
+        self.client.force_authenticate(user=self.user)
         self.activity = Activity.objects.create(
             user=self.user,
             title="Actividad para subtareas US02",
             course=None,
+            type=Activity.TypeChoices.OTRO,
         )
+        self.url = f"/api/activity/{self.activity.id}/subtasks/"
 
     def test_create_subtask_with_required_fields_success(self):
         """Se puede crear una subtarea con user, title, activity_id y estimated_hours > 0."""
         payload = {
             "title": "Subtarea mínima",
-            "user": self.user.id,
-            "activity_id": str(self.activity.id),
             "estimated_hours": "1.50",
         }
         response = self.client.post(self.url, payload, format="json")
@@ -60,8 +60,6 @@ class US02SubtaskCreationValidationTests(TestCase):
         """La subtarea creada queda vinculada a la actividad indicada en activity_id."""
         payload = {
             "title": "Subtarea vinculada",
-            "user": self.user.id,
-            "activity_id": str(self.activity.id),
             "estimated_hours": "2.00",
         }
         response = self.client.post(self.url, payload, format="json")
@@ -76,8 +74,6 @@ class US02SubtaskCreationValidationTests(TestCase):
     def test_create_subtask_missing_title_returns_400(self):
         """El título es obligatorio: si falta, se devuelve 400."""
         payload = {
-            "user": self.user.id,
-            "activity_id": str(self.activity.id),
             "estimated_hours": "1.00",
         }
         response = self.client.post(self.url, payload, format="json")
@@ -88,8 +84,6 @@ class US02SubtaskCreationValidationTests(TestCase):
         """El título vacío no es permitido."""
         payload = {
             "title": "",
-            "user": self.user.id,
-            "activity_id": str(self.activity.id),
             "estimated_hours": "1.00",
         }
         response = self.client.post(self.url, payload, format="json")
@@ -100,8 +94,6 @@ class US02SubtaskCreationValidationTests(TestCase):
         """Título solo con espacios dispara la validación personalizada."""
         payload = {
             "title": "   ",
-            "user": self.user.id,
-            "activity_id": str(self.activity.id),
             "estimated_hours": "1.00",
         }
         response = self.client.post(self.url, payload, format="json")
@@ -112,39 +104,15 @@ class US02SubtaskCreationValidationTests(TestCase):
             response.data["title"],
         )
 
-    def test_create_subtask_missing_user_returns_400(self):
-        """El usuario es obligatorio: si falta, se devuelve 400."""
+    def test_create_subtask_without_auth_in_dev_mode_creates_successfully(self):
+        """En modo desarrollo, sin autenticación también se pueden crear subtareas."""
+        self.client.force_authenticate(user=None)
         payload = {
-            "title": "Sin usuario",
-            "activity_id": str(self.activity.id),
+            "title": "Sin auth",
             "estimated_hours": "1.00",
         }
         response = self.client.post(self.url, payload, format="json")
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("user", response.data)
-
-    def test_create_subtask_missing_activity_id_returns_400(self):
-        """activity_id es obligatorio: si falta, se devuelve 400."""
-        payload = {
-            "title": "Sin actividad",
-            "user": self.user.id,
-            "estimated_hours": "1.00",
-        }
-        response = self.client.post(self.url, payload, format="json")
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("activity_id", response.data)
-
-    def test_create_subtask_invalid_activity_id_returns_400(self):
-        """Si activity_id no existe, se devuelve 400."""
-        payload = {
-            "title": "Actividad inexistente",
-            "user": self.user.id,
-            "activity_id": str(uuid.uuid4()),
-            "estimated_hours": "1.00",
-        }
-        response = self.client.post(self.url, payload, format="json")
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("activity_id", response.data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_create_subtask_estimated_hours_zero_returns_400(self):
         """Las horas estimadas deben ser mayores a 0."""

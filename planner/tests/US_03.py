@@ -30,12 +30,14 @@ class US03ActivityUpdateDeleteTests(TestCase):
             password="pass",
             name="Usuario US03 Activity",
         )
-        self.course = Course.objects.create(name="Curso US03")
+        self.client.force_authenticate(user=self.user)
+        self.course = Course.objects.create(name="Curso US03", user=self.user)
         self.activity = Activity.objects.create(
             user=self.user,
             title="Actividad a editar/eliminar",
             description="Descripción original",
             course=self.course,
+            type=Activity.TypeChoices.OTRO,
         )
 
     def test_patch_activity_title_success(self):
@@ -65,8 +67,8 @@ class US03ActivityUpdateDeleteTests(TestCase):
         payload = {
             "title": "Título PUT completo",
             "description": "Desc PUT",
-            "user": self.user.id,
             "course_id": str(self.course.id),
+            "type": Activity.TypeChoices.TALLER,
         }
         response = self.client.put(
             f"{self.base_url}{self.activity.id}/",
@@ -113,16 +115,17 @@ class US03SubtaskUpdateDeleteTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.base_url = "/api/subtask/"
         self.user = User.objects.create_user(
             email="us03sub@test.com",
             password="pass",
             name="Usuario US03 Subtask",
         )
+        self.client.force_authenticate(user=self.user)
         self.activity = Activity.objects.create(
             user=self.user,
             title="Actividad para subtareas US03",
             course=None,
+            type=Activity.TypeChoices.OTRO,
         )
         self.subtask = Subtask.objects.create(
             user=self.user,
@@ -131,6 +134,7 @@ class US03SubtaskUpdateDeleteTests(TestCase):
             status=Subtask.Status.PENDIENTE,
             estimated_hours=2.00,
         )
+        self.base_url = f"/api/activity/{self.activity.id}/subtasks/"
 
     def test_patch_subtask_title_success(self):
         """PATCH actualiza solo el título de la subtarea."""
@@ -171,8 +175,6 @@ class US03SubtaskUpdateDeleteTests(TestCase):
         """PUT con campos completos actualiza la subtarea."""
         payload = {
             "title": "Subtarea PUT completa",
-            "user": self.user.id,
-            "activity_id": str(self.activity.id),
             "status": Subtask.Status.ESPERA,
             "estimated_hours": "1.25",
         }
@@ -222,16 +224,17 @@ class US03ActivitySubtaskCascadeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.activity_url = "/api/activity/"
-        self.subtask_url = "/api/subtask/"
         self.user = User.objects.create_user(
             email="us03cascade@test.com",
             password="pass",
             name="Usuario US03 Cascade",
         )
+        self.client.force_authenticate(user=self.user)
         self.activity = Activity.objects.create(
             user=self.user,
             title="Actividad con subtareas para borrar",
             course=None,
+            type=Activity.TypeChoices.OTRO,
         )
         self.subtask1 = Subtask.objects.create(
             user=self.user,
@@ -260,7 +263,7 @@ class US03ActivitySubtaskCascadeTests(TestCase):
     def test_delete_subtask_does_not_delete_activity(self):
         """Eliminar una subtarea no elimina la actividad."""
         activity_id = self.activity.id
-        self.client.delete(f"{self.subtask_url}{self.subtask1.id}/")
+        self.client.delete(f"/api/activity/{self.activity.id}/subtasks/{self.subtask1.id}/")
         self.assertTrue(Activity.objects.filter(id=activity_id).exists())
         self.assertFalse(Subtask.objects.filter(id=self.subtask1.id).exists())
         self.assertTrue(Subtask.objects.filter(id=self.subtask2.id).exists())

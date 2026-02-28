@@ -178,3 +178,8 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API documentation for Planner project',
     'VERSION': '1.0.0',
 }
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "https://frontend-five-lemon-73.vercel.app",
+]
