@@ -99,9 +99,19 @@ class ActivitySerializer(serializers.ModelSerializer):
     def validate(self, data):
         event_datetime = data.get("event_datetime")
         deadline = data.get("deadline")
-        title = data.get("title", getattr(self.instance, "title", None))
+        title = data.get("title")
+        # Si no se proporciona title en la actualización, usar el de la instancia
+        if title is None and self.instance:
+            title = self.instance.title
+        # Normalizar el título
+        if title:
+            title = str(title).strip()
+        
         # Nota: en este serializer el campo de escritura es course_id (PKRelatedField)
-        course = data.get("course_id", getattr(self.instance, "course", None))
+        course = data.get("course_id")
+        # Si no se proporciona course_id en la actualización, usar el de la instancia
+        if course is None and self.instance:
+            course = self.instance.course
 
         # Resolver usuario (en dev sin auth usamos el usuario genérico)
         request = self.context.get("request")
@@ -113,14 +123,25 @@ class ActivitySerializer(serializers.ModelSerializer):
             )
 
         # Evitar duplicados: mismo curso + mismo título (por usuario)
-        if course and title and str(title).strip():
-            qs = Activity.objects.filter(user=user, course=course, title__iexact=str(title).strip())
-            if self.instance:
-                qs = qs.exclude(pk=self.instance.pk)
-            if qs.exists():
-                raise serializers.ValidationError(
-                    {"title": "Ya existe una actividad con este título en el curso seleccionado."}
-                )
+        # Solo validar si hay curso y título, y si estamos creando o si el título/course cambió
+        if course and title:
+            # Verificar si el título o curso cambió en una actualización
+            title_changed = not self.instance or (self.instance.title.strip() != title)
+            
+            # Comparar course_id: course puede ser un objeto Course o None
+            course_id = course.id if hasattr(course, 'id') else course
+            instance_course_id = self.instance.course_id if self.instance and self.instance.course_id else None
+            course_changed = not self.instance or (instance_course_id != course_id)
+            
+            # Solo validar duplicados si estamos creando o si el título/course cambió
+            if not self.instance or title_changed or course_changed:
+                qs = Activity.objects.filter(user=user, course=course, title__iexact=title)
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+                if qs.exists():
+                    raise serializers.ValidationError(
+                        {"title": "Ya existe una actividad con este título en el curso seleccionado."}
+                    )
 
         if event_datetime and event_datetime < timezone.now():
             raise serializers.ValidationError({
