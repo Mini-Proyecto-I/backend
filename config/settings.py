@@ -61,7 +61,19 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = os.getenv("DEBUG", "True") == "True"
+CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://frontend-five-lemon-73.vercel.app",
+    "https://study-flow-docs.vercel.app",
+]
+
+# Opcional: permite previews de Vercel (*.vercel.app)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
 
 ROOT_URLCONF = 'config.urls'
 
