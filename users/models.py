@@ -39,7 +39,7 @@ class User(AbstractUser):
         decimal_places=2,
         default=6.0,
         validators=[MinValueValidator(0.5), MaxValueValidator(24.0)],
-        help_text="Horas de estudio configuradas para planificar tareas (1-16).",
+        help_text="Horas de estudio configuradas para planificar tareas (1-24).",
     )
 
     objects = UserManager()
