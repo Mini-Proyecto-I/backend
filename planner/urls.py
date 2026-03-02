@@ -16,4 +16,6 @@ activity_router.register(r'subtasks', SubtaskViewSet, basename='activity-subtask
 urlpatterns = [
     path('', include(router.urls)),
     path('', include(activity_router.urls)),
+    # Endpoint para vista "Hoy" con ordenamiento en backend
+    path('hoy/', TodayView.as_view(), name='today'),
 ]
