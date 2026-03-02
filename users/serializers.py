@@ -8,7 +8,22 @@ User = get_user_model()
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Incluye email y nombre en el payload del token para uso en el frontend."""
+    """
+    Serializer personalizado para autenticación JWT que usa email en lugar de username.
+    Incluye email y nombre en el payload del token para uso en el frontend.
+    
+    Nota: El campo en el request body debe llamarse 'email' (no 'username').
+    """
+    
+    # Especificar que el campo de autenticación es 'email'
+    username_field = 'email'
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Renombrar el campo 'username' a 'email' en el formulario
+        if 'username' in self.fields:
+            self.fields['email'] = self.fields.pop('username')
+            self.fields['email'].label = 'Email'
 
     @classmethod
     def get_token(cls, user):
