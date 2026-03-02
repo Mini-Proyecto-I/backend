@@ -462,7 +462,6 @@ class TodayView(APIView):
             user=user,
             target_date__isnull=False  # Solo subtareas con fecha
         )
-        
         # Filtrar por estado si se proporciona
         if status_filter:
             queryset = queryset.filter(status=status_filter)
@@ -485,7 +484,6 @@ class TodayView(APIView):
                     'total_para_hoy': 0,
                     'total_proximas': 0,
                 }, status=status.HTTP_200_OK)
-        
         # Obtener todas las subtareas con sus relaciones (activity, course)
         # select_related() optimiza las consultas a la BD
         subtasks = queryset.select_related('activity', 'activity__course').all()
@@ -518,12 +516,18 @@ class TodayView(APIView):
         
         # LÓGICA DE ORDENAMIENTO EN BACKEND 
         # Vencidas: ordenar por fecha más antigua primero, luego por menor esfuerzo
+        # key=lambda x: (x.target_date, float(x.estimated_hours))
+        # - Primero ordena por target_date (ascendente = más antiguas primero)
+        # - Si hay empate en fecha, ordena por estimated_hours (ascendente = menor esfuerzo primero)
         vencidas.sort(key=lambda x: (x.target_date, float(x.estimated_hours)))
         
         # Para hoy: ordenar solo por menor esfuerzo (todas tienen la misma fecha)
         para_hoy.sort(key=lambda x: float(x.estimated_hours))
         
         # Próximas: ordenar por fecha más cercana primero, luego por menor esfuerzo
+        # key=lambda x: (x.target_date, float(x.estimated_hours))
+        # - Primero ordena por target_date (ascendente = más cercanas primero)
+        # - Si hay empate en fecha, ordena por estimated_hours (ascendente = menor esfuerzo primero)
         proximas.sort(key=lambda x: (x.target_date, float(x.estimated_hours)))
         
         # Serializar los datos 
