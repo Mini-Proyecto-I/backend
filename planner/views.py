@@ -105,8 +105,7 @@ class TodayView(APIView):
     
     Requiere autenticación: solo usuarios autenticados pueden ver sus propias subtareas.
     """
-    permission_classes = [AllowAny]  # Temporalmente sin autenticación para pruebas
-    # permission_classes = [IsAuthenticated]  # Descomentar para producción
+    permission_classes = [IsAuthenticated]
     
     @extend_schema(
         summary="Obtener subtareas para la vista 'Hoy'",
@@ -413,19 +412,7 @@ class TodayView(APIView):
             400 Bad Request: Si los parámetros de consulta son inválidos
             401 Unauthorized: Si no se proporciona token de autenticación válido
         """
-        # Manejar usuario autenticado o no autenticado (para pruebas)
-        user = getattr(request, "user", None)
-        if not user or not getattr(user, "is_authenticated", False):
-            # En desarrollo, sin autenticación se devuelven todas las subtareas
-            queryset_base = Subtask.objects.filter(
-                target_date__isnull=False
-            )
-        else:
-            # Usuario autenticado: solo sus subtareas
-            queryset_base = Subtask.objects.filter(
-                user=user,
-                target_date__isnull=False
-            )
+        user = request.user
         
         # Obtener query params opcionales con validación
         status_filter = request.query_params.get('status', None)
@@ -470,8 +457,11 @@ class TodayView(APIView):
         # Obtener fecha de referencia (hoy)
         today = timezone.localdate()
         
-        # Usar queryset base (ya filtrado por usuario si está autenticado)
-        queryset = queryset_base
+        # Obtener subtareas del usuario
+        queryset = Subtask.objects.filter(
+            user=user,
+            target_date__isnull=False  # Solo subtareas con fecha
+        )
         
         # Filtrar por estado si se proporciona
         if status_filter:
@@ -479,23 +469,22 @@ class TodayView(APIView):
         
         # Filtrar por curso si se proporciona
         if course_filter:
-            if user and getattr(user, "is_authenticated", False):
-                # Usuario autenticado: verificar que el curso pertenece al usuario
-                course_exists = Course.objects.filter(id=course_filter, user=user).exists()
-                if not course_exists:
-                    # Si el curso no existe o no pertenece al usuario, retornar vacío
-                    return Response({
-                        'vencidas': [],
-                        'para_hoy': [],
-                        'proximas': [],
-                        'regla_ordenamiento': 'Vencidas primero (más antiguas arriba), luego Para hoy, luego Próximas por fecha más cercana. Desempate: menor esfuerzo estimado primero.',
-                        'fecha_referencia': today.isoformat(),
-                        'total_vencidas': 0,
-                        'total_para_hoy': 0,
-                        'total_proximas': 0,
-                    }, status=status.HTTP_200_OK)
-            # Filtrar por curso (sin autenticación: cualquier curso)
-            queryset = queryset.filter(activity__course_id=course_filter)
+            # Verificar que el curso pertenece al usuario
+            course_exists = Course.objects.filter(id=course_filter, user=user).exists()
+            if course_exists:
+                queryset = queryset.filter(activity__course_id=course_filter)
+            else:
+                # Si el curso no existe o no pertenece al usuario, retornar vacío
+                return Response({
+                    'vencidas': [],
+                    'para_hoy': [],
+                    'proximas': [],
+                    'regla_ordenamiento': 'Vencidas primero (más antiguas arriba), luego Para hoy, luego Próximas por fecha más cercana. Desempate: menor esfuerzo estimado primero.',
+                    'fecha_referencia': today.isoformat(),
+                    'total_vencidas': 0,
+                    'total_para_hoy': 0,
+                    'total_proximas': 0,
+                }, status=status.HTTP_200_OK)
         
         # Obtener todas las subtareas con sus relaciones (activity, course)
         # select_related() optimiza las consultas a la BD
