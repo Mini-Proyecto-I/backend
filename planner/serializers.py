@@ -234,6 +234,22 @@ class SubtaskSerializer(serializers.ModelSerializer):
         return data
 
 
+class TodaySubtaskSerializer(serializers.ModelSerializer):
+    """
+    Serializer para subtareas en la vista "Hoy".
+    Incluye información completa de la actividad y curso para contexto.
+    """
+    activity = ActivitySerializer(read_only=True)
+    
+    class Meta:
+        model = Subtask
+        fields = [
+            "id", "title", "activity", "status", "estimated_hours",
+            "target_date", "is_conflicted", "execution_note"
+        ]
+        read_only_fields = ["id", "activity"]
+
+
 class ReprogrammingLogSerializer(serializers.ModelSerializer):
     subtask = SubtaskSerializer(read_only=True)
     subtask_id = serializers.PrimaryKeyRelatedField(
