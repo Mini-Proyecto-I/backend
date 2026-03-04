@@ -250,6 +250,18 @@ class TodaySubtaskSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "activity"]
 
 
+class TodayStudyTimeSerializer(serializers.ModelSerializer):
+    """
+    Serializer simple para el endpoint de tiempo de estudio de hoy.
+    Solo expone el estado y las horas estimadas de cada subtarea.
+    """
+
+    class Meta:
+        model = Subtask
+        fields = ["status", "estimated_hours"]
+        read_only_fields = ["status", "estimated_hours"]
+
+
 class ReprogrammingLogSerializer(serializers.ModelSerializer):
     subtask = SubtaskSerializer(read_only=True)
     subtask_id = serializers.PrimaryKeyRelatedField(

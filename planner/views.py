@@ -12,8 +12,12 @@ from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiParamete
 from drf_spectacular.types import OpenApiTypes
 from .models import Course, Activity, Subtask, ReprogrammingLog
 from .serializers import (
-    CourseSerializer, ActivitySerializer, SubtaskSerializer, 
-    ReprogrammingLogSerializer, TodaySubtaskSerializer
+    CourseSerializer,
+    ActivitySerializer,
+    SubtaskSerializer,
+    ReprogrammingLogSerializer,
+    TodaySubtaskSerializer,
+    TodayStudyTimeSerializer,
 )
 
 
@@ -550,3 +554,29 @@ class TodayView(APIView):
             'total_para_hoy': len(para_hoy),
             'total_proximas': len(proximas),
         }, status=status.HTTP_200_OK)
+
+
+class TodayStudyTimeView(APIView):
+    """
+    Endpoint para obtener las subtareas de HOY, devolviendo solo
+    el tiempo estimado y el estado de cada una.
+
+    Respuesta: lista de objetos con:
+      - status
+      - estimated_hours
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        today = timezone.localdate()
+
+        # Subtareas del usuario cuya fecha objetivo es hoy
+        queryset = Subtask.objects.filter(
+            user=user,
+            target_date=today,
+            target_date__isnull=False,
+        )
+
+        serializer = TodayStudyTimeSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
