@@ -1,7 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_nested.routers import NestedDefaultRouter 
-from .views import *
+from rest_framework_nested.routers import NestedDefaultRouter
+from .views import (
+    CourseViewSet,
+    ActivityViewSet,
+    SubtaskViewSet,
+    ReprogrammingLogViewSet,
+    TodayView,
+    TodayStudyTimeView,
+)
 
 # Router principal
 router = DefaultRouter()
@@ -18,4 +25,6 @@ urlpatterns = [
     path('', include(activity_router.urls)),
     # Endpoint para vista "Hoy" con ordenamiento en backend
     path('hoy/', TodayView.as_view(), name='today'),
+    # Endpoint para tiempo de estudio de hoy (solo tiempo y estado)
+    path('hoy/tiempo/', TodayStudyTimeView.as_view(), name='today-study-time'),
 ]
