@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import generics, permissions
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.viewsets import ModelViewSet
+from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
@@ -19,6 +20,29 @@ User = get_user_model()
 class CustomTokenObtainPairView(TokenObtainPairView):
     """Vista de obtención de token JWT que devuelve email y nombre en el payload."""
     serializer_class = CustomTokenObtainPairSerializer
+
+
+class UserStatsView(APIView):
+    """
+    Endpoint público para obtener estadísticas de usuarios.
+    Devuelve el número total de usuarios registrados.
+    """
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Obtener estadísticas de usuarios",
+        description="Endpoint público que devuelve el número total de usuarios registrados.",
+        responses={
+            200: OpenApiTypes.OBJECT,
+        },
+    )
+    def get(self, request):
+        # Contar todos los usuarios (incluyendo inactivos)
+        # Usar filter() explícitamente para asegurar que contamos todos
+        total_users = User.objects.all().count()
+        return Response({
+            'total_users': int(total_users)  # Asegurar que sea un entero
+        }, status=status.HTTP_200_OK)
 
 
 class UserViewSet(ModelViewSet):
