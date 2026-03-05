@@ -1,11 +1,23 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .views import CustomTokenObtainPairView
+from .views import CustomTokenObtainPairView, UserViewSet, UserStatsView
 
 app_name = "users"
 
+# Router para el ViewSet de usuarios
+router = DefaultRouter()
+router.register(r'users', UserViewSet, basename='user')
+
 urlpatterns = [
+    # Rutas de autenticación JWT
     path("token/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    
+    # Estadísticas públicas
+    path("stats/", UserStatsView.as_view(), name="user-stats"),
+    
+    # Rutas del router (incluye /api/auth/users/)
+    path("", include(router.urls)),
 ]
