@@ -22,6 +22,8 @@ from .serializers import (
 import datetime
 from django.shortcuts import get_object_or_404
 from .serializers import SubtaskSerializer
+from django.db.models import Sum
+from decimal import Decimal
 
 User = get_user_model()
 
@@ -618,6 +620,22 @@ class UpdateSubtaskTargetDateView(APIView):
                 **serializer.data,
                 "message": "La fecha es la misma, no se realizaron cambios."
             }, status=status.HTTP_200_OK)
+        
+        # Validación de sobrecarga diaria
+        carga_actual = Subtask.objects.filter(
+            user=request.user,
+            target_date=target_date,
+            status='PENDING'
+        ).aggregate(total=Sum('estimated_hours'))['total'] or 0
+        
+        limite_diario = getattr(request.user, 'daily_hours_limit', 6.0)
+        nueva_carga = Decimal(str(carga_actual)) + subtask.estimated_hours
+
+        if nueva_carga > Decimal(str(limite_diario)):
+            return Response(
+                {"error": "Conflicto por sobrecarga diaria"},
+                status=status.HTTP_409_CONFLICT
+            )
 
         reason = request.data.get('reason', '')
 
@@ -638,3 +656,46 @@ class UpdateSubtaskTargetDateView(APIView):
         serializer = SubtaskSerializer(subtask)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+class ConfiguracionView(APIView):
+    """
+    Endpoint para obtener y actualizar la configuración del usuario (ej: daily_hours_limit).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            "daily_hours_limit": float(user.daily_hours_limit)
+        }, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        user = request.user
+        limit_val = request.data.get("daily_hours_limit")
+        
+        if limit_val is None:
+            return Response(
+                {"error": "Se requiere 'daily_hours_limit' en el cuerpo de la petición."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            from decimal import Decimal
+            limit = Decimal(str(limit_val))
+            if limit < Decimal("0.5") or limit > Decimal("24.0"):
+                return Response(
+                    {"error": "El límite de horas debe ser un valor entre 0.5 y 24.0."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except (ValueError, TypeError, ArithmeticError):
+            return Response(
+                {"error": "Valor de horas inválido."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        user.daily_hours_limit = limit
+        user.save(update_fields=["daily_hours_limit"])
+        
+        return Response({
+            "daily_hours_limit": float(user.daily_hours_limit),
+            "message": "Configuración actualizada correctamente."
+        }, status=status.HTTP_200_OK)

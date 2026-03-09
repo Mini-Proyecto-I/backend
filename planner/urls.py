@@ -9,6 +9,7 @@ from .views import (
     TodayView,
     TodayStudyTimeView,
     UpdateSubtaskTargetDateView,
+    ConfiguracionView,
 )
 
 # Router principal
@@ -30,4 +31,6 @@ urlpatterns = [
     path('hoy/tiempo/', TodayStudyTimeView.as_view(), name='today-study-time'),
     # Endpoint PUT /api/subtareas/<id>/
     path('subtareas/<uuid:pk>/', UpdateSubtaskTargetDateView.as_view(), name='update-subtask-target-date'),
+    # Endpoint GET y PUT /api/configuracion/
+    path('configuracion/', ConfiguracionView.as_view(), name='configuracion'),
 ]
