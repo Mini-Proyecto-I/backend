@@ -19,7 +19,9 @@ from .serializers import (
     TodaySubtaskSerializer,
     TodayStudyTimeSerializer,
 )
-
+import datetime
+from django.shortcuts import get_object_or_404
+from .serializers import SubtaskSerializer
 
 User = get_user_model()
 
@@ -564,3 +566,75 @@ class TodayStudyTimeView(APIView):
 
         serializer = TodayStudyTimeSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class UpdateSubtaskTargetDateView(APIView):
+    """
+    Endpoint para actualizar la fecha objetivo (target_date) de una subtarea.
+    Valida que la subtarea pertenezca al usuario y que la nueva fecha tenga sentido
+    con respecto a la actividad padre.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, pk):
+        # Valida que la tarea sea del usuario logueado
+        subtask = get_object_or_404(Subtask, id=pk, user=request.user)
+        
+        # Obtener fecha de la request
+        target_date_str = request.data.get('target_date')
+            
+        if not target_date_str:
+            return Response(
+                {"error": "Se requiere el campo 'target_date' en el cuerpo de la petición."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"error": "Formato de fecha inválido. Se espera YYYY-MM-DD."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Valida que la fecha no sea anterior a hoy
+        if target_date < timezone.localdate():
+            return Response(
+                {"error": "La fecha no puede ser anterior a hoy."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Valida que la fecha tenga sentido con la actividad padre
+        activity = subtask.activity
+        if activity.deadline and target_date > activity.deadline:
+            return Response(
+                {"error": "La fecha no puede superar el límite de la actividad."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if subtask.target_date == target_date:
+            # No hay cambio, retornamos éxito pero sin guardar ni crear log
+            serializer = SubtaskSerializer(subtask)
+            return Response({
+                **serializer.data,
+                "message": "La fecha es la misma, no se realizaron cambios."
+            }, status=status.HTTP_200_OK)
+
+        reason = request.data.get('reason', '')
+
+        old_date = subtask.target_date
+        subtask.target_date = target_date
+        subtask.save()
+        
+        # Crear registro de trazabilidad
+        ReprogrammingLog.objects.create(
+            subtask=subtask,
+            previous_date=old_date,
+            new_date=target_date,
+            reason=reason
+        )
+
+        # Retorna 200 OK con los datos nuevos
+        
+        serializer = SubtaskSerializer(subtask)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
