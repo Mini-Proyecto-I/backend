@@ -19,7 +19,7 @@ from .serializers import (
     TodaySubtaskSerializer,
     TodayStudyTimeSerializer,
 )
-import datetime
+from datetime import datetime
 from django.shortcuts import get_object_or_404
 from .serializers import SubtaskSerializer
 from django.db.models import Sum
@@ -569,6 +569,7 @@ class TodayStudyTimeView(APIView):
         serializer = TodayStudyTimeSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+
 class UpdateSubtaskTargetDateView(APIView):
     """
     Endpoint para actualizar la fecha objetivo (target_date) de una subtarea.
@@ -583,78 +584,119 @@ class UpdateSubtaskTargetDateView(APIView):
         
         # Obtener fecha de la request
         target_date_str = request.data.get('target_date')
+        estimated_hours = request.data.get('estimated_hours')
             
-        if not target_date_str:
-            return Response(
-                {"error": "Se requiere el campo 'target_date' en el cuerpo de la petición."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Validar fecha
+        target_date = None
+        if target_date_str:
+            try:
+                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "Formato de fecha inválido. Use YYYY-MM-DD."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
+            # Validar no sea fecha pasada
+            if target_date < timezone.localdate():
+                return Response(
+                    {"error": "La fecha no puede ser anterior a hoy."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar coherencia con Actividad Padre
+            activity = subtask.activity
+            if activity.deadline and target_date > activity.deadline:
+                return Response(
+                    {"error": "La fecha no puede superar el límite de la actividad."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Validar horas estimadas 
+        if estimated_hours is not None:
+            try:
+                estimated_hours = Decimal(str(estimated_hours))
+                if estimated_hours <= 0:
+                    return Response(
+                        {"error": "Las horas estimadas deben ser mayores a 0."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except (ValueError, TypeError):
+                return Response(
+                    {"error": "Las horas estimadas deben ser un número válido."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            subtask.estimated_hours = estimated_hours
+
+        # Calcular carga diaria para validación
+        date_to_check = target_date if target_date else subtask.target_date
+
+        carga_data = Subtask.objects.filter(
+            user=request.user,
+            target_date=date_to_check,
+            status='PENDING'
+        ).exclude(id=subtask.id).aggregate(total=Sum('estimated_hours'))
+
+        carga_actual = carga_data['total'] or Decimal('0')
+
+        nueva_carga = carga_actual + subtask.estimated_hours
+
+        # Obtener límite diario
+
         try:
-            target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
-        except ValueError:
-            return Response(
-                {"error": "Formato de fecha inválido. Se espera YYYY-MM-DD."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            limite_diario = Decimal(str(request.user.profile.daily_hour_limit))
+        except (AttributeError, TypeError):
+            limite_diario = Decimal('6.0')
 
-        # Valida que la fecha no sea anterior a hoy
-        if target_date < timezone.localdate():
-            return Response(
-                {"error": "La fecha no puede ser anterior a hoy."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Preparar metadata de carga diaria
+        daily_load = {
+            "current_hours": float(nueva_carga),
+            "limit": float(limite_diario),
+            "has_conflict": nueva_carga > limite_diario,
+            "exceeded_by": float(nueva_carga - limite_diario) if nueva_carga > limite_diario else 0
+        }
 
-        # Valida que la fecha tenga sentido con la actividad padre
-        activity = subtask.activity
-        if activity.deadline and target_date > activity.deadline:
-            return Response(
-                {"error": "La fecha no puede superar el límite de la actividad."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        if subtask.target_date == target_date:
-            # No hay cambio, retornamos éxito pero sin guardar ni crear log
+        has_date_change = target_date and target_date != subtask.target_date
+        has_hours_change = estimated_hours and estimated_hours != subtask.estimated_hours
+        
+        # Validar si hay cambios reales
+        if not has_date_change and not has_hours_change:
             serializer = SubtaskSerializer(subtask)
             return Response({
                 **serializer.data,
-                "message": "La fecha es la misma, no se realizaron cambios."
+                "message": "No se realizaron cambios.",
+                "daily_load": daily_load
             }, status=status.HTTP_200_OK)
-        
-        # Validación de sobrecarga diaria
-        carga_actual = Subtask.objects.filter(
-            user=request.user,
-            target_date=target_date,
-            status='PENDING'
-        ).aggregate(total=Sum('estimated_hours'))['total'] or 0
-        
-        limite_diario = getattr(request.user, 'daily_hours_limit', 6.0)
-        nueva_carga = Decimal(str(carga_actual)) + subtask.estimated_hours
 
-        if nueva_carga > Decimal(str(limite_diario)):
-            return Response(
-                {"error": "Conflicto por sobrecarga diaria"},
-                status=status.HTTP_409_CONFLICT
+        # Guardar cambios
+        old_date = subtask.target_date
+        if target_date:
+            subtask.target_date = target_date
+        subtask.save()
+
+        # Crear log
+        if has_date_change:
+            reason = request.data.get('reason', 'Reprogramación manual')
+            ReprogrammingLog.objects.create(
+                subtask=subtask,
+                previous_date=old_date,
+                new_date=subtask.target_date,
+                reason=reason
             )
 
-        reason = request.data.get('reason', '')
-
-        old_date = subtask.target_date
-        subtask.target_date = target_date
-        subtask.save()
-        
-        # Crear registro de trazabilidad
-        ReprogrammingLog.objects.create(
-            subtask=subtask,
-            previous_date=old_date,
-            new_date=target_date,
-            reason=reason
-        )
-
-        # Retorna 200 OK con los datos nuevos
-        
+        # Retornar respuesta
         serializer = SubtaskSerializer(subtask)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        response_data = {
+            **serializer.data,
+            "daily_load": daily_load,
+            "message": "Subtarea actualizada correctamente."
+        }
+
+        if daily_load['has_conflict']:
+            response_data["warning"] = f"Conflicto de sobrecarga. Quedarías con {daily_load['current_hours']}h planificadas (límite {daily_load['limit']}h)."
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
 
 class ConfiguracionView(APIView):
     """
@@ -698,4 +740,95 @@ class ConfiguracionView(APIView):
         return Response({
             "daily_hours_limit": float(user.daily_hours_limit),
             "message": "Configuración actualizada correctamente."
+        }, status=status.HTTP_200_OK)
+
+class SubtaskCalendarView(APIView):
+    """
+    Endpoint para evaluar si una subtarea en particular cabe o no en cada día de una semana (lunes a domingo).
+    Devuelve las tareas planificadas por día y un booleano indicando riesgo de conflicto por sobrecarga o límites.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from django.shortcuts import get_object_or_404
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+        from decimal import Decimal
+        from .serializers import SubtaskSerializer
+        
+        subtask = get_object_or_404(Subtask, id=pk, user=request.user)
+        
+        date_param = request.query_params.get('date')
+        today = timezone.localdate()
+        if date_param:
+            try:
+                base_date = datetime.strptime(date_param, "%Y-%m-%d").date()
+            except ValueError:
+                base_date = today
+        else:
+            base_date = today
+            
+        # Lunes a Domingo (weekday 0 a 6)
+        start_of_week = base_date - timedelta(days=base_date.weekday())
+        end_of_week = start_of_week + timedelta(days=6)
+        
+        try:
+            limite_diario = Decimal(str(request.user.daily_hours_limit))
+        except (AttributeError, TypeError):
+            limite_diario = Decimal('6.0')
+            
+        tasks_in_week = Subtask.objects.filter(
+            user=request.user,
+            target_date__gte=start_of_week,
+            target_date__lte=end_of_week,
+            status='PENDING'
+        ).select_related('activity')
+        
+        tasks_by_day = {start_of_week + timedelta(days=i): [] for i in range(7)}
+        for t in tasks_in_week:
+            tasks_by_day[t.target_date].append(t)
+            
+        calendar_days = []
+        for i in range(7):
+            current_date = start_of_week + timedelta(days=i)
+            day_tasks = tasks_by_day[current_date]
+            
+            # Excluir la subtarea actual si ya está planificada este día
+            carga_actual = sum((t.estimated_hours for t in day_tasks if t.id != subtask.id), Decimal('0'))
+            nueva_carga = carga_actual + subtask.estimated_hours
+            
+            fits = True
+            reason = ""
+            
+            if current_date < today:
+                fits = False
+                reason = "La fecha ya pasó."
+            elif subtask.activity.deadline and current_date > subtask.activity.deadline:
+                fits = False
+                reason = "Supera la fecha límite de la actividad."
+            elif subtask.activity.event_datetime and current_date > subtask.activity.event_datetime.date():
+                fits = False
+                reason = "Supera la fecha del evento."
+            elif nueva_carga > limite_diario:
+                fits = False
+                reason = "Excede el límite de horas diarias (sobrecarga)."
+                
+            calendar_days.append({
+                "date": str(current_date),
+                "tasks": SubtaskSerializer(day_tasks, many=True).data,
+                "fits": fits,
+                "reason": reason,
+                "current_load": float(carga_actual),
+                "limit": float(limite_diario)
+            })
+            
+        return Response({
+            "subtask": {
+                "id": subtask.id,
+                "title": subtask.title,
+                "estimated_hours": float(subtask.estimated_hours)
+            },
+            "start_date": str(start_of_week),
+            "end_date": str(end_of_week),
+            "calendar": calendar_days
         }, status=status.HTTP_200_OK)
