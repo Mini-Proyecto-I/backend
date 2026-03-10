@@ -19,7 +19,11 @@ from .serializers import (
     TodaySubtaskSerializer,
     TodayStudyTimeSerializer,
 )
-
+from datetime import datetime
+from django.shortcuts import get_object_or_404
+from .serializers import SubtaskSerializer
+from django.db.models import Sum
+from decimal import Decimal
 
 User = get_user_model()
 
@@ -564,3 +568,337 @@ class TodayStudyTimeView(APIView):
 
         serializer = TodayStudyTimeSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class UpdateSubtaskTargetDateView(APIView):
+    """
+    Endpoint para actualizar la fecha objetivo (target_date) de una subtarea.
+    Valida que la subtarea pertenezca al usuario y que la nueva fecha tenga sentido
+    con respecto a la actividad padre.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Modificar fecha o estimación de subtarea (Resuelve Conflictos)",
+        description="""
+        Actualiza `target_date` y/o `estimated_hours` de una subtarea.
+        - `estimated_hours` debe ser mayor a 0.
+        - `target_date` no debe ser anterior a hoy ni superar la fecha límite de la actividad padre.
+        
+        **Tolerancia a conflictos:** Si el cambio excede el límite de horas diarias, se aplica de todas formas (retornando un 200 OK) y se emite un campo `warning` para el frontend con el objeto `daily_load`.
+        """,
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "target_date": {"type": "string", "format": "date", "description": "Nueva fecha objetivo (YYYY-MM-DD)"},
+                    "estimated_hours": {"type": "number", "format": "float", "description": "Nuevas horas estimadas"},
+                    "reason": {"type": "string", "description": "Motivo de la reprogramación"}
+                }
+            }
+        },
+        responses={
+            200: OpenApiResponse(description="Éxito, podría incluir `warning` si hay sobrecarga y `daily_load`."),
+            400: OpenApiResponse(description="Error de validación sobre los parámetros."),
+            404: OpenApiResponse(description="Subtarea no encontrada para el usuario provisto.")
+        }
+    )
+    def put(self, request, pk):
+        # Valida que la tarea sea del usuario logueado
+        subtask = get_object_or_404(Subtask, id=pk, user=request.user)
+        
+        # Obtener fecha de la request
+        target_date_str = request.data.get('target_date')
+        estimated_hours = request.data.get('estimated_hours')
+            
+        # Validar fecha
+        target_date = None
+        if target_date_str:
+            try:
+                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return Response(
+                    {"error": "Formato de fecha inválido. Use YYYY-MM-DD."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar no sea fecha pasada
+            if target_date < timezone.localdate():
+                return Response(
+                    {"error": "La fecha no puede ser anterior a hoy."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar coherencia con Actividad Padre
+            activity = subtask.activity
+            if activity.deadline and target_date > activity.deadline:
+                return Response(
+                    {"error": "La fecha no puede superar el límite de la actividad."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Validar horas estimadas 
+        if estimated_hours is not None:
+            try:
+                estimated_hours = Decimal(str(estimated_hours))
+                if estimated_hours <= 0:
+                    return Response(
+                        {"error": "Las horas estimadas deben ser mayores a 0."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except (ValueError, TypeError):
+                return Response(
+                    {"error": "Las horas estimadas deben ser un número válido."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            subtask.estimated_hours = estimated_hours
+
+        # Calcular carga diaria para validación
+        date_to_check = target_date if target_date else subtask.target_date
+
+        carga_data = Subtask.objects.filter(
+            user=request.user,
+            target_date=date_to_check,
+            status='PENDING'
+        ).exclude(id=subtask.id).aggregate(total=Sum('estimated_hours'))
+
+        carga_actual = carga_data['total'] or Decimal('0')
+
+        nueva_carga = carga_actual + subtask.estimated_hours
+
+        # Obtener límite diario
+
+        try:
+            limite_diario = Decimal(str(request.user.profile.daily_hour_limit))
+        except (AttributeError, TypeError):
+            limite_diario = Decimal('6.0')
+
+        # Preparar metadata de carga diaria
+        daily_load = {
+            "current_hours": float(nueva_carga),
+            "limit": float(limite_diario),
+            "has_conflict": nueva_carga > limite_diario,
+            "exceeded_by": float(nueva_carga - limite_diario) if nueva_carga > limite_diario else 0
+        }
+
+        has_date_change = target_date and target_date != subtask.target_date
+        has_hours_change = estimated_hours and estimated_hours != subtask.estimated_hours
+        
+        # Validar si hay cambios reales
+        if not has_date_change and not has_hours_change:
+            serializer = SubtaskSerializer(subtask)
+            return Response({
+                **serializer.data,
+                "message": "No se realizaron cambios.",
+                "daily_load": daily_load
+            }, status=status.HTTP_200_OK)
+
+        # Guardar cambios
+        old_date = subtask.target_date
+        if target_date:
+            subtask.target_date = target_date
+        subtask.save()
+
+        # Crear log
+        if has_date_change:
+            reason = request.data.get('reason', 'Reprogramación manual')
+            ReprogrammingLog.objects.create(
+                subtask=subtask,
+                previous_date=old_date,
+                new_date=subtask.target_date,
+                reason=reason
+            )
+
+        # Retornar respuesta
+        serializer = SubtaskSerializer(subtask)
+        response_data = {
+            **serializer.data,
+            "daily_load": daily_load,
+            "message": "Subtarea actualizada correctamente."
+        }
+
+        if daily_load['has_conflict']:
+            response_data["warning"] = f"Conflicto de sobrecarga. Quedarías con {daily_load['current_hours']}h planificadas (límite {daily_load['limit']}h)."
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class ConfiguracionView(APIView):
+    """
+    Endpoint para obtener y actualizar la configuración del usuario (ej: daily_hours_limit).
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Obtener configuración de usuario",
+        description="Retorna el límite de horas planificables por día `daily_hours_limit` del usuario.",
+        responses={
+            200: OpenApiResponse(description="Devuelve el límite actual del usuario.")
+        }
+    )
+    def get(self, request):
+        user = request.user
+        return Response({
+            "daily_hours_limit": float(user.daily_hours_limit)
+        }, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary="Actualizar configuración de usuario",
+        description="Permite al usuario ajustar su `daily_hours_limit` con un valor entre 0.5 y 24.0.",
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "daily_hours_limit": {"type": "number", "format": "float", "description": "Nuevo límite de horas (0.5 a 24.0)."}
+                },
+                "required": ["daily_hours_limit"]
+            }
+        },
+        responses={
+            200: OpenApiResponse(description="Configuración actualizada con éxito."),
+            400: OpenApiResponse(description="Límite faltante, inválido o fuera del rango aceptado.")
+        }
+    )
+    def put(self, request):
+        user = request.user
+        limit_val = request.data.get("daily_hours_limit")
+        
+        if limit_val is None:
+            return Response(
+                {"error": "Se requiere 'daily_hours_limit' en el cuerpo de la petición."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            from decimal import Decimal
+            limit = Decimal(str(limit_val))
+            if limit < Decimal("0.5") or limit > Decimal("24.0"):
+                return Response(
+                    {"error": "El límite de horas debe ser un valor entre 0.5 y 24.0."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except (ValueError, TypeError, ArithmeticError):
+            return Response(
+                {"error": "Valor de horas inválido."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        user.daily_hours_limit = limit
+        user.save(update_fields=["daily_hours_limit"])
+        
+        return Response({
+            "daily_hours_limit": float(user.daily_hours_limit),
+            "message": "Configuración actualizada correctamente."
+        }, status=status.HTTP_200_OK)
+
+class SubtaskCalendarView(APIView):
+    """
+    Endpoint para evaluar si una subtarea en particular cabe o no en cada día de una semana (lunes a domingo).
+    Devuelve las tareas planificadas por día y un booleano indicando riesgo de conflicto por sobrecarga o límites.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Consultar disponibilidad en el calendario (1 semana)",
+        description="""
+        Devuelve un calendario de 7 días (Lunes a Domingo) de la semana de una fecha dada.
+        En cada día, incluye las tareas planeadas e indica si la subtarea solicitada "cabe" (`fits: true|false`).
+        Muestra la razón (`reason`) si no cabe (ej: fecha pasada, excede límite de actividad, o resulta en sobrecarga).
+        """,
+        parameters=[
+            OpenApiParameter(
+                name='date',
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Fecha pivote para calcular la semana (formato YYYY-MM-DD). Si no se pasa, asume hoy.',
+            )
+        ],
+        responses={
+            200: OpenApiResponse(description="Estructura del calendario semanal, con lista de tareas por día y evaluación de factibilidad."),
+            404: OpenApiResponse(description="Subtarea no existe o acceso denegado.")
+        }
+    )
+    def get(self, request, pk):
+        from django.shortcuts import get_object_or_404
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+        from decimal import Decimal
+        from .serializers import SubtaskSerializer
+        
+        subtask = get_object_or_404(Subtask, id=pk, user=request.user)
+        
+        date_param = request.query_params.get('date')
+        today = timezone.localdate()
+        if date_param:
+            try:
+                base_date = datetime.strptime(date_param, "%Y-%m-%d").date()
+            except ValueError:
+                base_date = today
+        else:
+            base_date = today
+            
+        # Lunes a Domingo (weekday 0 a 6)
+        start_of_week = base_date - timedelta(days=base_date.weekday())
+        end_of_week = start_of_week + timedelta(days=6)
+        
+        try:
+            limite_diario = Decimal(str(request.user.daily_hours_limit))
+        except (AttributeError, TypeError):
+            limite_diario = Decimal('6.0')
+            
+        tasks_in_week = Subtask.objects.filter(
+            user=request.user,
+            target_date__gte=start_of_week,
+            target_date__lte=end_of_week,
+            status='PENDING'
+        ).select_related('activity')
+        
+        tasks_by_day = {start_of_week + timedelta(days=i): [] for i in range(7)}
+        for t in tasks_in_week:
+            tasks_by_day[t.target_date].append(t)
+            
+        calendar_days = []
+        for i in range(7):
+            current_date = start_of_week + timedelta(days=i)
+            day_tasks = tasks_by_day[current_date]
+            
+            # Excluir la subtarea actual si ya está planificada este día
+            carga_actual = sum((t.estimated_hours for t in day_tasks if t.id != subtask.id), Decimal('0'))
+            nueva_carga = carga_actual + subtask.estimated_hours
+            
+            fits = True
+            reason = ""
+            
+            if current_date < today:
+                fits = False
+                reason = "La fecha ya pasó."
+            elif subtask.activity.deadline and current_date > subtask.activity.deadline:
+                fits = False
+                reason = "Supera la fecha límite de la actividad."
+            elif subtask.activity.event_datetime and current_date > subtask.activity.event_datetime.date():
+                fits = False
+                reason = "Supera la fecha del evento."
+            elif nueva_carga > limite_diario:
+                fits = False
+                reason = "Excede el límite de horas diarias (sobrecarga)."
+                
+            calendar_days.append({
+                "date": str(current_date),
+                "tasks": SubtaskSerializer(day_tasks, many=True).data,
+                "fits": fits,
+                "reason": reason,
+                "current_load": float(carga_actual),
+                "limit": float(limite_diario)
+            })
+            
+        return Response({
+            "subtask": {
+                "id": subtask.id,
+                "title": subtask.title,
+                "estimated_hours": float(subtask.estimated_hours)
+            },
+            "start_date": str(start_of_week),
+            "end_date": str(end_of_week),
+            "calendar": calendar_days
+        }, status=status.HTTP_200_OK)
