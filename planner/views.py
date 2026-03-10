@@ -578,6 +578,31 @@ class UpdateSubtaskTargetDateView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Modificar fecha o estimación de subtarea (Resuelve Conflictos)",
+        description="""
+        Actualiza `target_date` y/o `estimated_hours` de una subtarea.
+        - `estimated_hours` debe ser mayor a 0.
+        - `target_date` no debe ser anterior a hoy ni superar la fecha límite de la actividad padre.
+        
+        **Tolerancia a conflictos:** Si el cambio excede el límite de horas diarias, se aplica de todas formas (retornando un 200 OK) y se emite un campo `warning` para el frontend con el objeto `daily_load`.
+        """,
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "target_date": {"type": "string", "format": "date", "description": "Nueva fecha objetivo (YYYY-MM-DD)"},
+                    "estimated_hours": {"type": "number", "format": "float", "description": "Nuevas horas estimadas"},
+                    "reason": {"type": "string", "description": "Motivo de la reprogramación"}
+                }
+            }
+        },
+        responses={
+            200: OpenApiResponse(description="Éxito, podría incluir `warning` si hay sobrecarga y `daily_load`."),
+            400: OpenApiResponse(description="Error de validación sobre los parámetros."),
+            404: OpenApiResponse(description="Subtarea no encontrada para el usuario provisto.")
+        }
+    )
     def put(self, request, pk):
         # Valida que la tarea sea del usuario logueado
         subtask = get_object_or_404(Subtask, id=pk, user=request.user)
@@ -704,12 +729,36 @@ class ConfiguracionView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Obtener configuración de usuario",
+        description="Retorna el límite de horas planificables por día `daily_hours_limit` del usuario.",
+        responses={
+            200: OpenApiResponse(description="Devuelve el límite actual del usuario.")
+        }
+    )
     def get(self, request):
         user = request.user
         return Response({
             "daily_hours_limit": float(user.daily_hours_limit)
         }, status=status.HTTP_200_OK)
 
+    @extend_schema(
+        summary="Actualizar configuración de usuario",
+        description="Permite al usuario ajustar su `daily_hours_limit` con un valor entre 0.5 y 24.0.",
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "daily_hours_limit": {"type": "number", "format": "float", "description": "Nuevo límite de horas (0.5 a 24.0)."}
+                },
+                "required": ["daily_hours_limit"]
+            }
+        },
+        responses={
+            200: OpenApiResponse(description="Configuración actualizada con éxito."),
+            400: OpenApiResponse(description="Límite faltante, inválido o fuera del rango aceptado.")
+        }
+    )
     def put(self, request):
         user = request.user
         limit_val = request.data.get("daily_hours_limit")
@@ -749,6 +798,27 @@ class SubtaskCalendarView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Consultar disponibilidad en el calendario (1 semana)",
+        description="""
+        Devuelve un calendario de 7 días (Lunes a Domingo) de la semana de una fecha dada.
+        En cada día, incluye las tareas planeadas e indica si la subtarea solicitada "cabe" (`fits: true|false`).
+        Muestra la razón (`reason`) si no cabe (ej: fecha pasada, excede límite de actividad, o resulta en sobrecarga).
+        """,
+        parameters=[
+            OpenApiParameter(
+                name='date',
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Fecha pivote para calcular la semana (formato YYYY-MM-DD). Si no se pasa, asume hoy.',
+            )
+        ],
+        responses={
+            200: OpenApiResponse(description="Estructura del calendario semanal, con lista de tareas por día y evaluación de factibilidad."),
+            404: OpenApiResponse(description="Subtarea no existe o acceso denegado.")
+        }
+    )
     def get(self, request, pk):
         from django.shortcuts import get_object_or_404
         from datetime import datetime, timedelta
