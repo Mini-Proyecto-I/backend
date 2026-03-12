@@ -691,7 +691,7 @@ class UpdateSubtaskTargetDateView(APIView):
         # Obtener límite diario
 
         try:
-            limite_diario = Decimal(str(request.user.profile.daily_hour_limit))
+            limite_diario = Decimal(str(request.user.daily_hours_limit))
         except (AttributeError, TypeError):
             limite_diario = Decimal('6.0')
 
