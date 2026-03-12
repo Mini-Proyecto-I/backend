@@ -628,7 +628,10 @@ class UpdateSubtaskTargetDateView(APIView):
     def put(self, request, pk):
         # Valida que la tarea sea del usuario logueado
         subtask = get_object_or_404(Subtask, id=pk, user=request.user)
-        
+
+        # Guardar valores originales para detectar cambios reales
+        original_target_date = subtask.target_date
+        original_estimated_hours = subtask.estimated_hours
         # Obtener fecha de la request
         target_date_str = request.data.get('target_date')
         estimated_hours = request.data.get('estimated_hours')
@@ -673,6 +676,7 @@ class UpdateSubtaskTargetDateView(APIView):
                     {"error": "Las horas estimadas deben ser un número válido."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            # Actualizamos en memoria; se persistirá solo si se detecta cambio real
             subtask.estimated_hours = estimated_hours
 
         # Calcular carga diaria para validación
@@ -703,8 +707,9 @@ class UpdateSubtaskTargetDateView(APIView):
             "exceeded_by": float(nueva_carga - limite_diario) if nueva_carga > limite_diario else 0
         }
 
-        has_date_change = target_date and target_date != subtask.target_date
-        has_hours_change = estimated_hours and estimated_hours != subtask.estimated_hours
+        # Detectar cambios comparando contra los valores originales
+        has_date_change = target_date is not None and target_date != original_target_date
+        has_hours_change = estimated_hours is not None and estimated_hours != original_estimated_hours
         
         # Validar si hay cambios reales
         if not has_date_change and not has_hours_change:
