@@ -220,18 +220,35 @@ class SubtaskSerializer(serializers.ModelSerializer):
             activity = self.instance.activity
 
         target_date = data.get("target_date", getattr(self.instance, "target_date", None))
+        ##Comparación de horas con el límite diario
+        estimated_hours = data.get(
+            "estimated_hours", getattr(self.instance, "estimated_hours", 0)
+        )
+
 
         if target_date and activity:
-            if activity.deadline and target_date > activity.deadline:
-                raise serializers.ValidationError({
-                    "target_date": "La fecha de la subtarea no puede ser posterior a la fecha límite de la actividad."
-            })
-            if activity.event_datetime and target_date > activity.event_datetime.date():
-                raise serializers.ValidationError({
-                "target_date": "La fecha de la subtarea no puede ser posterior a la fecha del evento."
-            })
+            ##OBtener subtareas del mismo día.
+            subtasks_same_day = Subtask.objects.filter(
+                activity__user=activity.user,
+                target_date=target_date
+            )
 
+            ##Si se esta haciendo una actualizacion se excluye la misma tarea.
+            if self.instance:
+                subtasks_same_day = subtasks_same_day.exclude(id= self.instance.id)
+
+            total_hours = sum(s.estimated_hours for s in subtasks_same_day)
+
+            #Limite diario
+            daily_limit = activity.user.daily_hours_limit
+
+            if total_hours + estimated_hours > daily_limit:
+                raise serializers.ValidationError({
+                    "estimated_hours": "Se excede el limite diario de horas planificadas."
+                })
+            
         return data
+
 
 
 class TodaySubtaskSerializer(serializers.ModelSerializer):

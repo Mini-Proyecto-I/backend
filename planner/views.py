@@ -24,6 +24,7 @@ from django.shortcuts import get_object_or_404
 from .serializers import SubtaskSerializer
 from django.db.models import Sum
 from decimal import Decimal
+from collections import defaultdict
 
 User = get_user_model()
 
@@ -524,20 +525,41 @@ class TodayView(APIView):
         # - Si hay empate en fecha, ordena por estimated_hours (ascendente = menor esfuerzo primero)
         proximas.sort(key=lambda x: (x.target_date, float(x.estimated_hours)))
         
-        # Serializar los datos 
+        # Serializar los datos
         serializer = TodaySubtaskSerializer
-        
-        # Regla de ordenamiento para mostrar en la UI 
+        data_vencidas = serializer(vencidas, many=True).data
+        data_para_hoy = serializer(para_hoy, many=True).data
+        data_proximas = serializer(proximas, many=True).data
+
+        # Calcular is_conflicted: días donde la suma de horas supera el límite del usuario
+        try:
+            limite_diario = Decimal(str(user.daily_hours_limit))
+        except (AttributeError, TypeError):
+            limite_diario = Decimal('6.0')
+        date_to_hours = defaultdict(Decimal)
+        for sub in vencidas + para_hoy + proximas:
+            if sub.target_date is not None:
+                date_to_hours[sub.target_date] += sub.estimated_hours
+        overloaded_dates = {d for d, h in date_to_hours.items() if h > limite_diario}
+
+        for i, sub in enumerate(vencidas):
+            data_vencidas[i]['is_conflicted'] = sub.target_date in overloaded_dates
+        for i, sub in enumerate(para_hoy):
+            data_para_hoy[i]['is_conflicted'] = sub.target_date in overloaded_dates
+        for i, sub in enumerate(proximas):
+            data_proximas[i]['is_conflicted'] = sub.target_date in overloaded_dates
+
+        # Regla de ordenamiento para mostrar en la UI
         regla_ordenamiento = (
             "Vencidas primero (más antiguas arriba), luego Para hoy, "
             "luego Próximas por fecha más cercana. Desempate: menor esfuerzo estimado primero."
         )
-        
+
         # Devolver respuesta con subtareas agrupadas y ordenadas
         return Response({
-            'vencidas': serializer(vencidas, many=True).data,
-            'para_hoy': serializer(para_hoy, many=True).data,
-            'proximas': serializer(proximas, many=True).data,
+            'vencidas': data_vencidas,
+            'para_hoy': data_para_hoy,
+            'proximas': data_proximas,
             'regla_ordenamiento': regla_ordenamiento,
             'fecha_referencia': today.isoformat(),
             'total_vencidas': len(vencidas),
@@ -606,7 +628,10 @@ class UpdateSubtaskTargetDateView(APIView):
     def put(self, request, pk):
         # Valida que la tarea sea del usuario logueado
         subtask = get_object_or_404(Subtask, id=pk, user=request.user)
-        
+
+        # Guardar valores originales para detectar cambios reales
+        original_target_date = subtask.target_date
+        original_estimated_hours = subtask.estimated_hours
         # Obtener fecha de la request
         target_date_str = request.data.get('target_date')
         estimated_hours = request.data.get('estimated_hours')
@@ -651,6 +676,7 @@ class UpdateSubtaskTargetDateView(APIView):
                     {"error": "Las horas estimadas deben ser un número válido."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            # Actualizamos en memoria; se persistirá solo si se detecta cambio real
             subtask.estimated_hours = estimated_hours
 
         # Calcular carga diaria para validación
@@ -669,7 +695,7 @@ class UpdateSubtaskTargetDateView(APIView):
         # Obtener límite diario
 
         try:
-            limite_diario = Decimal(str(request.user.profile.daily_hour_limit))
+            limite_diario = Decimal(str(request.user.daily_hours_limit))
         except (AttributeError, TypeError):
             limite_diario = Decimal('6.0')
 
@@ -681,8 +707,9 @@ class UpdateSubtaskTargetDateView(APIView):
             "exceeded_by": float(nueva_carga - limite_diario) if nueva_carga > limite_diario else 0
         }
 
-        has_date_change = target_date and target_date != subtask.target_date
-        has_hours_change = estimated_hours and estimated_hours != subtask.estimated_hours
+        # Detectar cambios comparando contra los valores originales
+        has_date_change = target_date is not None and target_date != original_target_date
+        has_hours_change = estimated_hours is not None and estimated_hours != original_estimated_hours
         
         # Validar si hay cambios reales
         if not has_date_change and not has_hours_change:
