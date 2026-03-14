@@ -726,8 +726,8 @@ class UpdateSubtaskTargetDateView(APIView):
             subtask.target_date = target_date
         subtask.save()
 
-        # Crear log
-        if has_date_change:
+        # Crear log solo si ya tenía fecha (previous_date es obligatorio en el modelo)
+        if has_date_change and old_date is not None:
             reason = request.data.get('reason', 'Reprogramación manual')
             ReprogrammingLog.objects.create(
                 subtask=subtask,
