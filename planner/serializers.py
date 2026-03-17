@@ -66,6 +66,10 @@ class ActivitySerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    total_subtasks = serializers.IntegerField(read_only=True)
+    total_subtasks_done = serializers.IntegerField(read_only=True)
+    completion_percent = serializers.SerializerMethodField()
+
 
     class Meta:
         model = Activity
@@ -79,8 +83,11 @@ class ActivitySerializer(serializers.ModelSerializer):
             "created_at",
             "event_datetime",
             "deadline",
+            "total_subtasks",
+            "total_subtasks_done",
+            "completion_percent",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "created_at", "total_subtasks", "total_subtasks_done", "completion_percent"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -172,7 +179,13 @@ class ActivitySerializer(serializers.ModelSerializer):
         if "course_id" in validated_data:
             validated_data["course"] = validated_data.pop("course_id")
         return super().update(instance, validated_data)
-
+            
+    def get_completion_percent(self, obj):
+        total = getattr(obj, "total_subtasks", 0) or 0
+        done = getattr(obj, "total_subtasks_done", 0) or 0
+        if total == 0:
+            return 0.0
+        return round((done / total) * 100, 2)
 
 class SubtaskSerializer(serializers.ModelSerializer):
     activity = ActivitySerializer(read_only=True)
@@ -300,14 +313,20 @@ class ReprogrammingLogSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 class PostponeSubtaskSerializer(serializers.Serializer):
-    execution_note = serializers.CharField(required=True, allow_blank=True, trim_whitespace=True)
+    execution_note = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
     class Meta:
         model = Subtask
         fields = ["execution_note"]
 
-    def validate_execution_note(self, value):
-        if not value or not value.strip():
-            raise serializers.ValidationError(
-                "La nota de ejecución no puede estar vacía."
-            )
-        return value.strip()
+
+class CompletionPercentSerializer(serializers.Serializer):
+    completion_percent = serializers.FloatField(read_only=True)
+    from_date = serializers.DateField(required=False)
+    to_date = serializers.DateField(required=False)
+    total_subtasks = serializers.IntegerField(read_only=True)
+    total_subtasks_done = serializers.IntegerField(read_only=True)
+ 
+
+    class Meta:
+        model = Activity
+        fields = ["completion_percent", "from_date", "to_date", "total_subtasks", "total_subtasks_done"]
