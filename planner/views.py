@@ -18,6 +18,7 @@ from .serializers import (
     ReprogrammingLogSerializer,
     TodaySubtaskSerializer,
     TodayStudyTimeSerializer,
+    PostponeSubtaskSerializer,
 )
 from datetime import datetime
 from django.shortcuts import get_object_or_404
@@ -25,6 +26,7 @@ from .serializers import SubtaskSerializer
 from django.db.models import Sum
 from decimal import Decimal
 from collections import defaultdict
+from rest_framework.decorators import action
 
 User = get_user_model()
 
@@ -81,6 +83,87 @@ class SubtaskViewSet(ModelViewSet):
             raise NotFound("Actividad no encontrada o no tienes permisos.")
         serializer.save(user=self.request.user, activity=activity)
 
+    @extend_schema(
+        summary="Posponer una subtarea",
+        description="""
+        Marca la subtarea como **POSPUESTA** (`POSTPONED`) y guarda una nota/motivo en `execution_note`.
+
+        - Requiere autenticación (JWT).
+        - Solo permite posponer subtareas del usuario autenticado.
+
+        **URL (anidada por Activity):**
+        - `PATCH /api/activity/{activity_id}/subtasks/{subtask_id}/postpone/`
+        """,
+        request=PostponeSubtaskSerializer,
+        responses={
+            200: SubtaskSerializer,
+            400: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Body inválido (por ejemplo, `execution_note` vacío).",
+                examples=[
+                    OpenApiExample(
+                        "execution_note vacío",
+                        value={"execution_note": ["La nota de ejecución no puede estar vacía."]},
+                    )
+                ],
+            ),
+            401: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="No autenticado. Se requiere JWT válido.",
+                examples=[OpenApiExample("Sin credenciales", value={"detail": "Authentication credentials were not provided."})],
+            ),
+            404: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Subtarea no encontrada para el usuario/actividad indicados.",
+                examples=[OpenApiExample("No encontrada", value={"detail": "Not found."})],
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                "Request de posposición",
+                value={"execution_note": "Pospuesta por falta de tiempo"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Response 200 (subtarea actualizada)",
+                value={
+                    "id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b",
+                    "title": "Resolver guía",
+                    "activity": {
+                        "id": "96c51bae-7c27-48d6-9bff-6dd578d1629f",
+                        "title": "Parcial",
+                        "description": "",
+                        "course": {"id": "e5961b9a-16aa-41d2-a76d-57a9654de911", "name": "Cálculo"},
+                        "type": "examen",
+                        "created_at": "2026-03-01T00:00:00Z",
+                        "event_datetime": None,
+                        "deadline": "2026-03-10",
+                    },
+                    "status": "POSTPONED",
+                    "estimated_hours": "2.00",
+                    "target_date": "2026-03-07",
+                    "order": 0,
+                    "is_conflicted": False,
+                    "execution_note": "Pospuesta por falta de tiempo",
+                },
+                response_only=True,
+            ),
+        ],
+    )
+    @action(detail=True, methods=['patch'], url_path='postpone')
+    def postpone(self, request, pk=None, *args, **kwargs):
+        subtask = self.get_object()
+        input_ser = PostponeSubtaskSerializer(data=request.data)
+        input_ser.is_valid(raise_exception=True)
+
+        subtask.status = Subtask.Status.POSPUESTO 
+        subtask.execution_note = input_ser.validated_data['execution_note']
+        subtask.save(update_fields=['status','execution_note'])
+
+        output_ser = self.get_serializer(subtask)
+        return Response(output_ser.data, status=status.HTTP_200_OK)
+
+
 
 class ReprogrammingLogViewSet(ModelViewSet):
     serializer_class = ReprogrammingLogSerializer
@@ -89,6 +172,7 @@ class ReprogrammingLogViewSet(ModelViewSet):
     def get_queryset(self):
         # Solo logs de subtareas pertenecientes al usuario autenticado
         return ReprogrammingLog.objects.filter(subtask__user=self.request.user)
+
 class TodayView(APIView):
     """
     Vista "Hoy" - Endpoint para obtener subtareas agrupadas y ordenadas.

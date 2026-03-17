@@ -298,3 +298,16 @@ class ReprogrammingLogSerializer(serializers.ModelSerializer):
         if "subtask_id" in validated_data:
             validated_data["subtask"] = validated_data.pop("subtask_id")
         return super().update(instance, validated_data)
+
+class PostponeSubtaskSerializer(serializers.Serializer):
+    execution_note = serializers.CharField(required=True, allow_blank=True, trim_whitespace=True)
+    class Meta:
+        model = Subtask
+        fields = ["execution_note"]
+
+    def validate_execution_note(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                "La nota de ejecución no puede estar vacía."
+            )
+        return value.strip()
