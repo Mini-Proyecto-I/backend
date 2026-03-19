@@ -70,7 +70,7 @@ class ActivityViewSet(ModelViewSet):
                 'subtasks',
                 filter=Q(subtasks__status=Subtask.Status.REALIZADO)
             ),
-        )
+        ).prefetch_related('subtasks')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
