@@ -176,6 +176,7 @@ class ActivitySerializer(serializers.ModelSerializer):
 
 class SubtaskSerializer(serializers.ModelSerializer):
     activity = ActivitySerializer(read_only=True)
+    is_conflicted = serializers.SerializerMethodField()
 
     title = serializers.CharField(
         max_length=100,
@@ -191,6 +192,40 @@ class SubtaskSerializer(serializers.ModelSerializer):
             "target_date", "order", "is_conflicted", "execution_note"
         ]
         read_only_fields = ["id", "activity"]
+
+    def get_is_conflicted(self, obj):
+        if obj.status == "DONE":
+            return False
+        
+        target_date = obj.target_date
+        if not target_date:
+            return False
+            
+        request = self.context.get('request')
+        if not request:
+            # Fallback if no request context
+            return False
+            
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+            
+        # Use request-level cache to store overloaded dates
+        if not hasattr(request, '_overloaded_dates'):
+            from django.db.models import Sum
+            try:
+                limit = float(user.daily_hours_limit)
+            except (AttributeError, TypeError):
+                limit = 6.0
+                
+            loads = Subtask.objects.filter(
+                user=user, 
+                target_date__isnull=False
+            ).exclude(status="DONE").values('target_date').annotate(total=Sum('estimated_hours')).filter(total__gt=limit)
+            
+            request._overloaded_dates = {l['target_date'] for l in loads}
+            
+        return target_date in request._overloaded_dates
 
     def validate_title(self, value):
         if not value or not value.strip():
@@ -251,20 +286,16 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
 
 
-class TodaySubtaskSerializer(serializers.ModelSerializer):
+class TodaySubtaskSerializer(SubtaskSerializer):
     """
     Serializer para subtareas en la vista "Hoy".
     Incluye información completa de la actividad y curso para contexto.
     """
-    activity = ActivitySerializer(read_only=True)
-    
-    class Meta:
-        model = Subtask
+    class Meta(SubtaskSerializer.Meta):
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
             "target_date", "is_conflicted", "execution_note"
         ]
-        read_only_fields = ["id", "activity"]
 
 
 class TodayStudyTimeSerializer(serializers.ModelSerializer):

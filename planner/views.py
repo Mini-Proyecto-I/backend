@@ -608,30 +608,12 @@ class TodayView(APIView):
         # - Primero ordena por target_date (ascendente = más cercanas primero)
         # - Si hay empate en fecha, ordena por estimated_hours (ascendente = menor esfuerzo primero)
         proximas.sort(key=lambda x: (x.target_date, float(x.estimated_hours)))
-        
-        # Serializar los datos
-        serializer = TodaySubtaskSerializer
-        data_vencidas = serializer(vencidas, many=True).data
-        data_para_hoy = serializer(para_hoy, many=True).data
-        data_proximas = serializer(proximas, many=True).data
 
-        # Calcular is_conflicted: días donde la suma de horas supera el límite del usuario
-        try:
-            limite_diario = Decimal(str(user.daily_hours_limit))
-        except (AttributeError, TypeError):
-            limite_diario = Decimal('6.0')
-        date_to_hours = defaultdict(Decimal)
-        for sub in vencidas + para_hoy + proximas:
-            if sub.target_date is not None:
-                date_to_hours[sub.target_date] += sub.estimated_hours
-        overloaded_dates = {d for d, h in date_to_hours.items() if h > limite_diario}
-
-        for i, sub in enumerate(vencidas):
-            data_vencidas[i]['is_conflicted'] = sub.target_date in overloaded_dates
-        for i, sub in enumerate(para_hoy):
-            data_para_hoy[i]['is_conflicted'] = sub.target_date in overloaded_dates
-        for i, sub in enumerate(proximas):
-            data_proximas[i]['is_conflicted'] = sub.target_date in overloaded_dates
+        # Serializar los datos usando el nuevo serializer que calcula is_conflicted automáticamente
+        context = {'request': request}
+        data_vencidas = TodaySubtaskSerializer(vencidas, many=True, context=context).data
+        data_para_hoy = TodaySubtaskSerializer(para_hoy, many=True, context=context).data
+        data_proximas = TodaySubtaskSerializer(proximas, many=True, context=context).data
 
         # Regla de ordenamiento para mostrar en la UI
         regla_ordenamiento = (
