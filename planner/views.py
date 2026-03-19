@@ -19,6 +19,7 @@ from .serializers import (
     TodaySubtaskSerializer,
     TodayStudyTimeSerializer,
     PostponeSubtaskSerializer,
+    CompletionPercentSerializer,
 )
 from datetime import datetime
 from django.shortcuts import get_object_or_404
@@ -27,7 +28,7 @@ from django.db.models import Sum
 from decimal import Decimal
 from collections import defaultdict
 from rest_framework.decorators import action
-
+from django.db.models import Count, Q
 User = get_user_model()
 
 
@@ -55,11 +56,136 @@ class ActivityViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Activity.objects.filter(user=self.request.user)
+        """
+        Devuelve únicamente actividades pertenecientes al usuario autenticado.
+        Además, anota el total de subtareas y las completadas para poder
+        calcular el porcentaje de completitud por actividad.
+        """
+        user = self.request.user
+        base_qs = Activity.objects.filter(user=user)
+
+        return base_qs.annotate(
+            total_subtasks=Count('subtasks'),
+            total_subtasks_done=Count(
+                'subtasks',
+                filter=Q(subtasks__status=Subtask.Status.REALIZADO)
+            ),
+        )
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    @extend_schema(
+        summary="Porcentaje global de completitud de subtareas",
+        description="""
+        Calcula el porcentaje de subtareas completadas **exclusivamente para actividades
+        pertenecientes al usuario autenticado**.
+
+        Opcionalmente se puede limitar el cálculo a un rango de fechas usando:
+
+        - `from_date`: fecha mínima de `target_date` (incluida).
+        - `to_date`: fecha máxima de `target_date` (incluida).
+
+        Si no existen subtareas en el rango, devuelve `completion_percent = 0.0`.
+
+        ### Ejemplos de uso
+
+        - **Mes completo**: marzo de 2026
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-01&to_date=2026-03-31`
+
+        - **Semana concreta**: del 9 al 15 de marzo de 2026
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-09&to_date=2026-03-15`
+
+        - **Un solo día**: 10 de marzo de 2026
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-10&to_date=2026-03-10`
+
+        - **Desde una fecha hasta hoy** (sin `to_date`):
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-01`
+        """,
+        parameters=[
+            OpenApiParameter(
+                name="from_date",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Fecha inicial (YYYY-MM-DD) para filtrar por `target_date`.",
+            ),
+            OpenApiParameter(
+                name="to_date",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Fecha final (YYYY-MM-DD) para filtrar por `target_date`.",
+            ),
+        ],
+        responses={200: CompletionPercentSerializer},
+    )
+    @action(methods=['get'], detail=False, url_path='completion-percent')
+    def get_completion_percent(self, request):
+        """
+        Devuelve el porcentaje global de avance de las subtareas del usuario
+        autenticado, considerando solo actividades que le pertenecen y un
+        rango de fechas opcional.
+        """
+        # Validar e interpretar parámetros de entrada
+        input_serializer = CompletionPercentSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+
+        from_date = input_serializer.validated_data.get("from_date")
+        to_date = input_serializer.validated_data.get("to_date")
+
+        # Construir queryset base de subtareas del usuario y de sus actividades
+        qs = Subtask.objects.filter(user=request.user, activity__user=request.user)
+        if from_date:
+            qs = qs.filter(target_date__gte=from_date)
+        if to_date:
+            qs = qs.filter(target_date__lte=to_date)
+
+        total_subtasks = qs.count()
+        total_subtasks_done = qs.filter(status=Subtask.Status.REALIZADO).count()
+
+        if total_subtasks == 0:
+            completion_percent = 0.0
+        else:
+            completion_percent = float((total_subtasks_done / total_subtasks) * 100)
+
+        # Serializar salida con los campos calculados
+        output_serializer = CompletionPercentSerializer(
+            {
+                "completion_percent": completion_percent,
+                "from_date": from_date,
+                "to_date": to_date,
+                "total_subtasks": total_subtasks,
+                "total_subtasks_done": total_subtasks_done,
+            }
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary="Obtener actividad del usuario con porcentaje de completitud",
+        description="""
+        Devuelve el detalle de una actividad perteneciente **al usuario autenticado**,
+        incluyendo:
+
+        - Datos básicos de la actividad y su curso.
+        - `total_subtasks`: total de subtareas hijas.
+        - `total_subtasks_done`: subtareas hijas completadas.
+        - `completion_percent`: porcentaje de avance de la actividad.
+
+        No permite acceder a actividades de otros usuarios.
+        """,
+        responses={200: ActivitySerializer},
+    )
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Recupera una actividad que pertenece al usuario autenticado.
+        La seguridad se garantiza filtrando siempre por `user` en `get_queryset`.
+        """
+        return super().retrieve(request, *args, **kwargs)
 
 class SubtaskViewSet(ModelViewSet):
     serializer_class = SubtaskSerializer
