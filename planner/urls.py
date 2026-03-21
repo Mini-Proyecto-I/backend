@@ -6,6 +6,7 @@ from .views import (
     ActivityViewSet,
     SubtaskViewSet,
     ReprogrammingLogViewSet,
+    PosponedLogViewSet,
     TodayView,
     TodayStudyTimeView,
     UpdateSubtaskTargetDateView,
@@ -18,6 +19,7 @@ router = DefaultRouter()
 router.register(r'course', CourseViewSet, basename='course')
 router.register(r'activity', ActivityViewSet, basename='activity')
 router.register(r'reprogramming_log', ReprogrammingLogViewSet, basename='reprogramming_log')
+router.register(r'posponed_log', PosponedLogViewSet, basename='posponed_log')
 
 # Router anidado: subtasks dentro de activities
 activity_router = NestedDefaultRouter(router, r'activity', lookup='activity')

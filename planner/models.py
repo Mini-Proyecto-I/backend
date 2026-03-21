@@ -55,7 +55,7 @@ class Subtask(models.Model):
     target_date = models.DateField(null=True, blank=True)
     order = models.PositiveBigIntegerField(default=0)
     is_conflicted = models.BooleanField(default=False)
-    execution_note = models.TextField(blank=True, null=True)
+ 
     
     def __str__(self):
         return self.title
@@ -65,5 +65,10 @@ class ReprogrammingLog(models.Model):
     previous_date = models.DateField()
     new_date = models.DateField()
     reason = models.TextField() 
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class PosponedLog(models.Model):
+    subtask = models.ForeignKey(Subtask, on_delete=models.CASCADE, related_name='posponed_logs')
+    note = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 

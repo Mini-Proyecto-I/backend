@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from .models import Course, Activity, Subtask, ReprogrammingLog
+from .models import Course, Activity, Subtask, ReprogrammingLog, PosponedLog
 
 
 User = get_user_model()
@@ -200,8 +200,8 @@ class SubtaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subtask
         fields = [
-            "id", "title", "activity", "status", "estimated_hours", 
-            "target_date", "order", "is_conflicted", "execution_note"
+            "id", "title", "activity", "status", "estimated_hours",
+            "target_date", "order", "is_conflicted",
         ]
         read_only_fields = ["id", "activity"]
 
@@ -275,7 +275,7 @@ class TodaySubtaskSerializer(serializers.ModelSerializer):
         model = Subtask
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
-            "target_date", "is_conflicted", "execution_note"
+            "target_date", "is_conflicted",
         ]
         read_only_fields = ["id", "activity"]
 
@@ -330,3 +330,11 @@ class CompletionPercentSerializer(serializers.Serializer):
     class Meta:
         model = Activity
         fields = ["completion_percent", "from_date", "to_date", "total_subtasks", "total_subtasks_done"]
+
+
+class PosponedLogSerializer(serializers.ModelSerializer):
+    subtask = SubtaskSerializer(read_only=True)
+    class Meta:
+        model = PosponedLog
+        fields = ["id", "subtask", "note", "created_at"]
+        read_only_fields = ["id", "subtask", "note","created_at"]
