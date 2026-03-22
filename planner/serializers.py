@@ -58,8 +58,8 @@ class SubtaskSimpleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subtask
         fields = [
-            "id", "title", "status", "estimated_hours", 
-            "target_date", "order", "is_conflicted", "execution_note"
+            "id", "title", "status", "estimated_hours",
+            "target_date", "order", "is_conflicted",
         ]
 
     def get_is_conflicted(self, obj):
