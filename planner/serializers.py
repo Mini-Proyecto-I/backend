@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from .models import Course, Activity, Subtask, ReprogrammingLog
+from .models import Course, Activity, Subtask, ReprogrammingLog, PosponedLog
 
 
 User = get_user_model()
@@ -52,8 +52,48 @@ class CourseSerializer(serializers.ModelSerializer):
         validated_data["user"] = user
         return super().create(validated_data)
 
+class SubtaskSimpleSerializer(serializers.ModelSerializer):
+    is_conflicted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Subtask
+        fields = [
+            "id", "title", "status", "estimated_hours", 
+            "target_date", "order", "is_conflicted", "execution_note"
+        ]
+
+    def get_is_conflicted(self, obj):
+        if obj.status == "DONE":
+            return False
+        
+        target_date = obj.target_date
+        if not target_date:
+            return False
+            
+        request = self.context.get('request')
+        if not request:
+            return False
+            
+        user = (request.user if request.user.is_authenticated else None)
+        if not user:
+            return False
+            
+        if not hasattr(request, '_overloaded_dates'):
+            from django.db.models import Sum
+            limit = float(user.daily_hours_limit) if hasattr(user, "daily_hours_limit") else 6.0
+                
+            loads = Subtask.objects.filter(
+                user=user, 
+                target_date__isnull=False
+            ).exclude(status="DONE").values('target_date').annotate(total=Sum('estimated_hours')).filter(total__gt=limit)
+            
+            request._overloaded_dates = {l['target_date'] for l in loads}
+            
+        return target_date in request._overloaded_dates
+
 class ActivitySerializer(serializers.ModelSerializer):
     course = CourseSerializer(read_only=True)
+    subtasks = SubtaskSimpleSerializer(many=True, read_only=True)
     title = serializers.CharField(
         max_length=100,
         required=True,
@@ -66,6 +106,10 @@ class ActivitySerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    total_subtasks = serializers.IntegerField(read_only=True)
+    total_subtasks_done = serializers.IntegerField(read_only=True)
+    completion_percent = serializers.SerializerMethodField()
+
 
     class Meta:
         model = Activity
@@ -79,8 +123,12 @@ class ActivitySerializer(serializers.ModelSerializer):
             "created_at",
             "event_datetime",
             "deadline",
+            "total_subtasks",
+            "total_subtasks_done",
+            "completion_percent",
+            "subtasks",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "created_at", "total_subtasks", "total_subtasks_done", "completion_percent"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -172,10 +220,17 @@ class ActivitySerializer(serializers.ModelSerializer):
         if "course_id" in validated_data:
             validated_data["course"] = validated_data.pop("course_id")
         return super().update(instance, validated_data)
-
+            
+    def get_completion_percent(self, obj):
+        total = getattr(obj, "total_subtasks", 0) or 0
+        done = getattr(obj, "total_subtasks_done", 0) or 0
+        if total == 0:
+            return 0.0
+        return round((done / total) * 100, 2)
 
 class SubtaskSerializer(serializers.ModelSerializer):
     activity = ActivitySerializer(read_only=True)
+    is_conflicted = serializers.SerializerMethodField()
 
     title = serializers.CharField(
         max_length=100,
@@ -187,10 +242,44 @@ class SubtaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subtask
         fields = [
-            "id", "title", "activity", "status", "estimated_hours", 
-            "target_date", "order", "is_conflicted", "execution_note"
+            "id", "title", "activity", "status", "estimated_hours",
+            "target_date", "order", "is_conflicted",
         ]
         read_only_fields = ["id", "activity"]
+
+    def get_is_conflicted(self, obj):
+        if obj.status == "DONE":
+            return False
+        
+        target_date = obj.target_date
+        if not target_date:
+            return False
+            
+        request = self.context.get('request')
+        if not request:
+            # Fallback if no request context
+            return False
+            
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+            
+        # Use request-level cache to store overloaded dates
+        if not hasattr(request, '_overloaded_dates'):
+            from django.db.models import Sum
+            try:
+                limit = float(user.daily_hours_limit)
+            except (AttributeError, TypeError):
+                limit = 6.0
+                
+            loads = Subtask.objects.filter(
+                user=user, 
+                target_date__isnull=False
+            ).exclude(status="DONE").values('target_date').annotate(total=Sum('estimated_hours')).filter(total__gt=limit)
+            
+            request._overloaded_dates = {l['target_date'] for l in loads}
+            
+        return target_date in request._overloaded_dates
 
     def validate_title(self, value):
         if not value or not value.strip():
@@ -220,51 +309,51 @@ class SubtaskSerializer(serializers.ModelSerializer):
             activity = self.instance.activity
 
         target_date = data.get("target_date", getattr(self.instance, "target_date", None))
-        ##Comparación de horas con el límite diario
+        new_status = data.get("status", getattr(self.instance, "status", None))
         estimated_hours = data.get(
             "estimated_hours", getattr(self.instance, "estimated_hours", 0)
         )
 
+        # Si marcamos como DONE, no aplicamos validación de límite de horas.
+        # Las tareas realizadas ya no ocupan espacio en la planificación.
+        if new_status == "DONE":
+            return data
 
         if target_date and activity:
-            ##OBtener subtareas del mismo día.
+            ## OBtener subtareas del mismo día (excluyendo realizadas).
             subtasks_same_day = Subtask.objects.filter(
                 activity__user=activity.user,
                 target_date=target_date
-            )
+            ).exclude(status="DONE")
 
-            ##Si se esta haciendo una actualizacion se excluye la misma tarea.
+            ## Si se está haciendo una actualización se excluye la misma tarea.
             if self.instance:
-                subtasks_same_day = subtasks_same_day.exclude(id= self.instance.id)
+                subtasks_same_day = subtasks_same_day.exclude(id=self.instance.id)
 
             total_hours = sum(s.estimated_hours for s in subtasks_same_day)
 
-            #Limite diario
+            # Límite diario
             daily_limit = activity.user.daily_hours_limit
 
             if total_hours + estimated_hours > daily_limit:
                 raise serializers.ValidationError({
-                    "estimated_hours": "Se excede el limite diario de horas planificadas."
+                    "estimated_hours": "Se excede el límite diario de horas planificadas."
                 })
             
         return data
 
 
 
-class TodaySubtaskSerializer(serializers.ModelSerializer):
+class TodaySubtaskSerializer(SubtaskSerializer):
     """
     Serializer para subtareas en la vista "Hoy".
     Incluye información completa de la actividad y curso para contexto.
     """
-    activity = ActivitySerializer(read_only=True)
-    
-    class Meta:
-        model = Subtask
+    class Meta(SubtaskSerializer.Meta):
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
-            "target_date", "is_conflicted", "execution_note"
+            "target_date", "is_conflicted",
         ]
-        read_only_fields = ["id", "activity"]
 
 
 class TodayStudyTimeSerializer(serializers.ModelSerializer):
@@ -298,3 +387,30 @@ class ReprogrammingLogSerializer(serializers.ModelSerializer):
         if "subtask_id" in validated_data:
             validated_data["subtask"] = validated_data.pop("subtask_id")
         return super().update(instance, validated_data)
+
+class PostponeSubtaskSerializer(serializers.Serializer):
+    execution_note = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+    class Meta:
+        model = Subtask
+        fields = ["execution_note"]
+
+
+class CompletionPercentSerializer(serializers.Serializer):
+    completion_percent = serializers.FloatField(read_only=True)
+    from_date = serializers.DateField(required=False)
+    to_date = serializers.DateField(required=False)
+    total_subtasks = serializers.IntegerField(read_only=True)
+    total_subtasks_done = serializers.IntegerField(read_only=True)
+ 
+
+    class Meta:
+        model = Activity
+        fields = ["completion_percent", "from_date", "to_date", "total_subtasks", "total_subtasks_done"]
+
+
+class PosponedLogSerializer(serializers.ModelSerializer):
+    subtask = SubtaskSerializer(read_only=True)
+    class Meta:
+        model = PosponedLog
+        fields = ["id", "subtask", "note", "created_at"]
+        read_only_fields = ["id", "subtask", "note","created_at"]

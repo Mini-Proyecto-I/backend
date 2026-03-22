@@ -5,12 +5,18 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from django.utils import timezone
 from datetime import timedelta
-from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiParameter, OpenApiResponse
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+)
 from drf_spectacular.types import OpenApiTypes
-from .models import Course, Activity, Subtask, ReprogrammingLog
+from .models import Course, Activity, Subtask, ReprogrammingLog, PosponedLog
 from .serializers import (
     CourseSerializer,
     ActivitySerializer,
@@ -18,17 +24,61 @@ from .serializers import (
     ReprogrammingLogSerializer,
     TodaySubtaskSerializer,
     TodayStudyTimeSerializer,
+    PostponeSubtaskSerializer,
+    CompletionPercentSerializer,
+    PosponedLogSerializer,
 )
 from datetime import datetime
+from uuid import UUID
 from django.shortcuts import get_object_or_404
 from .serializers import SubtaskSerializer
 from django.db.models import Sum
 from decimal import Decimal
 from collections import defaultdict
-
+from rest_framework.decorators import action
+from django.db.models import Count, Q
 User = get_user_model()
 
+_BASE = "Todas las rutas del planner bajo el prefijo **`/api/`** (p. ej. `https://tu-dominio/api/...`). Requiere **JWT** salvo que se indique lo contrario."
 
+_SUBTASK_NESTED_SECURITY = (
+    "\n\n**Seguridad:** El queryset solo incluye subtareas **`user=request.user`** y de la **`activity_id`** del path. "
+    "Si el `id` de la subtarea no existe, es de otro usuario o no pertenece a esa actividad → **404**."
+)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="Listar cursos del usuario",
+        description=f"{_BASE}\n\n**URL:** `GET /api/course/`",
+        tags=["Cursos"],
+    ),
+    create=extend_schema(
+        summary="Crear curso",
+        description=f"{_BASE}\n\n**URL:** `POST /api/course/`",
+        tags=["Cursos"],
+    ),
+    retrieve=extend_schema(
+        summary="Detalle de curso",
+        description=f"{_BASE}\n\n**URL:** `GET /api/course/{{id}}/`",
+        tags=["Cursos"],
+    ),
+    update=extend_schema(
+        summary="Reemplazar curso",
+        description=f"{_BASE}\n\n**URL:** `PUT /api/course/{{id}}/`",
+        tags=["Cursos"],
+    ),
+    partial_update=extend_schema(
+        summary="Actualizar curso (parcial)",
+        description=f"{_BASE}\n\n**URL:** `PATCH /api/course/{{id}}/`",
+        tags=["Cursos"],
+    ),
+    destroy=extend_schema(
+        summary="Eliminar curso",
+        description=f"{_BASE}\n\n**URL:** `DELETE /api/course/{{id}}/`\n\nRespuesta típica: `204` con mensaje en cuerpo según implementación.",
+        tags=["Cursos"],
+    ),
+)
 class CourseViewSet(ModelViewSet):
     serializer_class = CourseSerializer
     permission_classes = [IsAuthenticated]
@@ -47,18 +97,216 @@ class CourseViewSet(ModelViewSet):
             {"detail": "Curso eliminado correctamente."},
             status=204
         )
-    
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="Listar actividades del usuario",
+        description=f"{_BASE}\n\n**URL:** `GET /api/activity/`\n\nIncluye anotaciones `total_subtasks`, `total_subtasks_done` y `completion_percent` por actividad.",
+        tags=["Actividades"],
+    ),
+    create=extend_schema(
+        summary="Crear actividad",
+        description=f"{_BASE}\n\n**URL:** `POST /api/activity/`",
+        tags=["Actividades"],
+    ),
+    update=extend_schema(
+        summary="Reemplazar actividad",
+        description=f"{_BASE}\n\n**URL:** `PUT /api/activity/{{id}}/`",
+        tags=["Actividades"],
+    ),
+    partial_update=extend_schema(
+        summary="Actualizar actividad (parcial)",
+        description=f"{_BASE}\n\n**URL:** `PATCH /api/activity/{{id}}/`",
+        tags=["Actividades"],
+    ),
+    destroy=extend_schema(
+        summary="Eliminar actividad",
+        description=f"{_BASE}\n\n**URL:** `DELETE /api/activity/{{id}}/`",
+        tags=["Actividades"],
+    ),
+)
 class ActivityViewSet(ModelViewSet):
     serializer_class = ActivitySerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Activity.objects.filter(user=self.request.user)
+        """
+        Devuelve únicamente actividades pertenecientes al usuario autenticado.
+        Además, anota el total de subtareas y las completadas para poder
+        calcular el porcentaje de completitud por actividad.
+        """
+        user = self.request.user
+        base_qs = Activity.objects.filter(user=user)
+
+        return base_qs.annotate(
+            total_subtasks=Count('subtasks'),
+            total_subtasks_done=Count(
+                'subtasks',
+                filter=Q(subtasks__status=Subtask.Status.REALIZADO)
+            ),
+        ).prefetch_related('subtasks')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    @extend_schema(
+        summary="Porcentaje global de completitud de subtareas",
+        description=f"""
+{_BASE}
 
+### URL
+`GET /api/activity/completion-percent/`
+
+Calcula el porcentaje de subtareas completadas **exclusivamente para actividades
+        pertenecientes al usuario autenticado**.
+
+        Opcionalmente se puede limitar el cálculo a un rango de fechas usando:
+
+        - `from_date`: fecha mínima de `target_date` (incluida).
+        - `to_date`: fecha máxima de `target_date` (incluida).
+
+        Si no existen subtareas en el rango, devuelve `completion_percent = 0.0`.
+
+        ### Ejemplos de uso
+
+        - **Mes completo**: marzo de 2026
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-01&to_date=2026-03-31`
+
+        - **Semana concreta**: del 9 al 15 de marzo de 2026
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-09&to_date=2026-03-15`
+
+        - **Un solo día**: 10 de marzo de 2026
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-10&to_date=2026-03-10`
+
+        - **Desde una fecha hasta hoy** (sin `to_date`):
+
+          `GET /api/activity/completion-percent/?from_date=2026-03-01`
+        """,
+        parameters=[
+            OpenApiParameter(
+                name="from_date",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Fecha inicial (YYYY-MM-DD) para filtrar por `target_date`.",
+            ),
+            OpenApiParameter(
+                name="to_date",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Fecha final (YYYY-MM-DD) para filtrar por `target_date`.",
+            ),
+        ],
+        responses={200: CompletionPercentSerializer},
+        tags=["Actividades"],
+    )
+    @action(methods=['get'], detail=False, url_path='completion-percent')
+    def get_completion_percent(self, request):
+        """
+        Devuelve el porcentaje global de avance de las subtareas del usuario
+        autenticado, considerando solo actividades que le pertenecen y un
+        rango de fechas opcional.
+        """
+        # Validar e interpretar parámetros de entrada
+        input_serializer = CompletionPercentSerializer(data=request.query_params)
+        input_serializer.is_valid(raise_exception=True)
+
+        from_date = input_serializer.validated_data.get("from_date")
+        to_date = input_serializer.validated_data.get("to_date")
+
+        # Construir queryset base de subtareas del usuario y de sus actividades
+        qs = Subtask.objects.filter(user=request.user, activity__user=request.user)
+        if from_date:
+            qs = qs.filter(target_date__gte=from_date)
+        if to_date:
+            qs = qs.filter(target_date__lte=to_date)
+
+        total_subtasks = qs.count()
+        total_subtasks_done = qs.filter(status=Subtask.Status.REALIZADO).count()
+
+        if total_subtasks == 0:
+            completion_percent = 0.0
+        else:
+            completion_percent = float((total_subtasks_done / total_subtasks) * 100)
+
+        # Serializar salida con los campos calculados
+        output_serializer = CompletionPercentSerializer(
+            {
+                "completion_percent": completion_percent,
+                "from_date": from_date,
+                "to_date": to_date,
+                "total_subtasks": total_subtasks,
+                "total_subtasks_done": total_subtasks_done,
+            }
+        )
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary="Obtener actividad del usuario con porcentaje de completitud",
+        description=f"""
+{_BASE}
+
+### URL
+`GET /api/activity/{{id}}/`
+
+Devuelve el detalle de una actividad perteneciente **al usuario autenticado**,
+        incluyendo:
+
+        - Datos básicos de la actividad y su curso.
+        - `total_subtasks`: total de subtareas hijas.
+        - `total_subtasks_done`: subtareas hijas completadas.
+        - `completion_percent`: porcentaje de avance de la actividad.
+
+        No permite acceder a actividades de otros usuarios.
+        """,
+        responses={200: ActivitySerializer},
+        tags=["Actividades"],
+    )
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Recupera una actividad que pertenece al usuario autenticado.
+        La seguridad se garantiza filtrando siempre por `user` en `get_queryset`.
+        """
+        return super().retrieve(request, *args, **kwargs)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="Listar subtareas (anidadas en actividad)",
+        description=f"{_BASE}\n\n**URL:** `GET /api/activity/{{activity_id}}/subtasks/`\n\nSolo subtareas del usuario; `activity_id` en la ruta acota a esa actividad.{_SUBTASK_NESTED_SECURITY}",
+        tags=["Subtareas"],
+    ),
+    create=extend_schema(
+        summary="Crear subtarea en una actividad",
+        description=f"{_BASE}\n\n**URL:** `POST /api/activity/{{activity_id}}/subtasks/`\n\nLa actividad del path debe ser del usuario.{_SUBTASK_NESTED_SECURITY}",
+        tags=["Subtareas"],
+    ),
+    retrieve=extend_schema(
+        summary="Detalle de subtarea",
+        description=f"{_BASE}\n\n**URL:** `GET /api/activity/{{activity_id}}/subtasks/{{id}}/`{_SUBTASK_NESTED_SECURITY}",
+        tags=["Subtareas"],
+    ),
+    update=extend_schema(
+        summary="Reemplazar subtarea",
+        description=f"{_BASE}\n\n**URL:** `PUT /api/activity/{{activity_id}}/subtasks/{{id}}/`{_SUBTASK_NESTED_SECURITY}",
+        tags=["Subtareas"],
+    ),
+    partial_update=extend_schema(
+        summary="Actualizar subtarea (parcial)",
+        description=f"{_BASE}\n\n**URL:** `PATCH /api/activity/{{activity_id}}/subtasks/{{id}}/`{_SUBTASK_NESTED_SECURITY}",
+        tags=["Subtareas"],
+    ),
+    destroy=extend_schema(
+        summary="Eliminar subtarea",
+        description=f"{_BASE}\n\n**URL:** `DELETE /api/activity/{{activity_id}}/subtasks/{{id}}/`{_SUBTASK_NESTED_SECURITY}",
+        tags=["Subtareas"],
+    ),
+)
 class SubtaskViewSet(ModelViewSet):
     serializer_class = SubtaskSerializer
     permission_classes = [IsAuthenticated]
@@ -81,7 +329,252 @@ class SubtaskViewSet(ModelViewSet):
             raise NotFound("Actividad no encontrada o no tienes permisos.")
         serializer.save(user=self.request.user, activity=activity)
 
+    @extend_schema(
+        summary="Posponer una subtarea",
+        description=f"""
+{_BASE}
 
+### Comportamiento
+- Pone la subtarea en estado **`POSTPONED`**.
+- Crea un registro en **`PosponedLog`** con el texto enviado en `execution_note` (campo persistido como `note` en el log).
+- La respuesta **`201`** incluye el objeto **`subtask`** (serializado) y **`posponed_log`** con `note` y `created_at`.
+
+### Seguridad
+La subtarea se resuelve con **`get_queryset()`**: debe ser **del usuario autenticado** y pertenecer a la **`activity_id`** de la URL. Si el `subtask_id` no existe, es de otro usuario o no está bajo esa actividad → **404** (`Not found`).
+
+### URL
+`PATCH /api/activity/{{activity_id}}/subtasks/{{subtask_id}}/postpone/`
+        """,
+        request=PostponeSubtaskSerializer,
+        responses={
+            201: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Subtarea pospuesta y log de posposición creado.",
+                examples=[
+                    OpenApiExample(
+                        "201 — subtarea + log",
+                        value={
+                            "subtask": {
+                                "id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b",
+                                "title": "Resolver guía",
+                                "status": "POSTPONED",
+                                "estimated_hours": "2.00",
+                                "target_date": "2026-03-07",
+                                "order": 0,
+                                "is_conflicted": False,
+                            },
+                            "posponed_log": {
+                                "note": "Pospuesta por falta de tiempo",
+                                "created_at": "2026-03-21T14:30:00Z",
+                            },
+                        },
+                        response_only=True,
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Cuerpo JSON inválido según validación del serializer.",
+            ),
+            401: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="No autenticado. Se requiere JWT válido.",
+                examples=[OpenApiExample("Sin credenciales", value={"detail": "Authentication credentials were not provided."})],
+            ),
+            404: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Subtarea inexistente, de otro usuario o no asociada a la actividad del path.",
+                examples=[OpenApiExample("No encontrada o no autorizada", value={"detail": "Not found."})],
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                "Request — motivo de posposición",
+                value={"execution_note": "Pospuesta por falta de tiempo"},
+                request_only=True,
+            ),
+        ],
+        tags=["Subtareas"],
+    )
+    @action(detail=True, methods=['patch'], url_path='postpone')
+    def postpone(self, request, pk=None, *args, **kwargs):
+        subtask = self.get_object()
+        input_ser = PostponeSubtaskSerializer(data=request.data)
+        input_ser.is_valid(raise_exception=True)
+
+        subtask.status = Subtask.Status.POSPUESTO 
+        subtask.save(update_fields=['status'])
+   
+        posponed_log = PosponedLog.objects.create(
+            subtask=subtask,
+            note=input_ser.validated_data.get("execution_note") or "",
+        ) 
+        output_data = {
+            'subtask': self.get_serializer(subtask).data,
+            'posponed_log': {
+                'note': posponed_log.note,
+                'created_at': posponed_log.created_at,
+            },
+        }
+        return Response(output_data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="Listar logs de posposición",
+        description=f"{_BASE}\n\n**URL:** `GET /api/posponed_log/`\n\nSolo logs cuya subtarea pertenece al usuario autenticado.",
+        tags=["Posposiciones"],
+    ),
+    create=extend_schema(
+        summary="Crear log de posposición (CRUD)",
+        description=f"{_BASE}\n\n**URL:** `POST /api/posponed_log/`",
+        tags=["Posposiciones"],
+    ),
+    retrieve=extend_schema(
+        summary="Detalle de un log de posposición",
+        description=f"{_BASE}\n\n**URL:** `GET /api/posponed_log/{{id}}/`",
+        tags=["Posposiciones"],
+    ),
+    update=extend_schema(
+        summary="Reemplazar log de posposición",
+        description=f"{_BASE}\n\n**URL:** `PUT /api/posponed_log/{{id}}/`",
+        tags=["Posposiciones"],
+    ),
+    partial_update=extend_schema(
+        summary="Actualizar log (parcial)",
+        description=f"{_BASE}\n\n**URL:** `PATCH /api/posponed_log/{{id}}/`",
+        tags=["Posposiciones"],
+    ),
+    destroy=extend_schema(
+        summary="Eliminar log de posposición",
+        description=f"{_BASE}\n\n**URL:** `DELETE /api/posponed_log/{{id}}/`",
+        tags=["Posposiciones"],
+    ),
+)
+class PosponedLogViewSet(ModelViewSet):
+    serializer_class = PosponedLogSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PosponedLog.objects.filter(subtask__user=self.request.user)
+
+    @extend_schema(
+        summary="Notas de posposición de una subtarea",
+        description=f"""
+{_BASE}
+
+Primero verifica que **`subtask_id`** sea un UUID válido y que la subtarea **exista y pertenezca al usuario autenticado**; si no → **404**. Si es válida y es tuya pero no hay logs, responde **200** con **`[]`**.
+
+### URL
+`GET /api/posponed_log/notes-of-subtask/{{subtask_id}}/`
+
+- `subtask_id`: UUID de la subtarea.
+        """,
+        parameters=[
+            OpenApiParameter(
+                name="subtask_id",
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                required=True,
+                description="UUID de la subtarea (debe ser del usuario autenticado).",
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Array JSON de logs; **`[]`** si la subtarea es tuya pero no hay registros.",
+                examples=[
+                    OpenApiExample(
+                        "200 — varias notas",
+                        value=[
+                            {
+                                "id": 1,
+                                "subtask": {"id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b", "title": "Resolver guía"},
+                                "note": "Sin tiempo hoy",
+                                "created_at": "2026-03-20T10:00:00Z",
+                            },
+                            {
+                                "id": 2,
+                                "subtask": {"id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b", "title": "Resolver guía"},
+                                "note": "Reagendar para el finde",
+                                "created_at": "2026-03-21T15:00:00Z",
+                            },
+                        ],
+                        response_only=True,
+                    ),
+                    OpenApiExample(
+                        "200 — sin registros",
+                        value=[],
+                        response_only=True,
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(
+                description="JWT requerido.",
+                examples=[OpenApiExample("Sin JWT", value={"detail": "Authentication credentials were not provided."})],
+            ),
+            404: OpenApiResponse(
+                description="Subtarea inexistente o no pertenece al usuario (mismo cuerpo genérico que Django REST).",
+                examples=[OpenApiExample("No encontrada", value={"detail": "Not found."}, response_only=True)],
+            ),
+            400: OpenApiResponse(
+                description="`subtask_id` no es un UUID válido.",
+                examples=[
+                    OpenApiExample(
+                        "UUID inválido",
+                        value={"subtask_id": ["Debe ser un UUID válido."]},
+                        response_only=True,
+                    ),
+                ],
+            ),
+        },
+        tags=["Posposiciones"],
+    )
+    @action(detail=False, methods=['get'], url_path='notes-of-subtask/(?P<subtask_id>[^/.]+)')
+    def get_notes_of_subtask(self, request, *args, **kwargs):
+        subtask_id = self.kwargs.get('subtask_id')
+        try:
+            UUID(str(subtask_id))
+        except ValueError:
+            raise ValidationError({'subtask_id': 'Debe ser un UUID válido.'})
+        get_object_or_404(Subtask, id=subtask_id, user=request.user)
+        logs = self.get_queryset().filter(subtask_id=subtask_id)
+        serializer = self.get_serializer(logs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="Listar logs de reprogramación",
+        description=f"{_BASE}\n\n**URL:** `GET /api/reprogramming_log/`",
+        tags=["Reprogramación"],
+    ),
+    create=extend_schema(
+        summary="Crear log de reprogramación",
+        description=f"{_BASE}\n\n**URL:** `POST /api/reprogramming_log/`",
+        tags=["Reprogramación"],
+    ),
+    retrieve=extend_schema(
+        summary="Detalle de log de reprogramación",
+        description=f"{_BASE}\n\n**URL:** `GET /api/reprogramming_log/{{id}}/`",
+        tags=["Reprogramación"],
+    ),
+    update=extend_schema(
+        summary="Reemplazar log de reprogramación",
+        description=f"{_BASE}\n\n**URL:** `PUT /api/reprogramming_log/{{id}}/`",
+        tags=["Reprogramación"],
+    ),
+    partial_update=extend_schema(
+        summary="Actualizar log (parcial)",
+        description=f"{_BASE}\n\n**URL:** `PATCH /api/reprogramming_log/{{id}}/`",
+        tags=["Reprogramación"],
+    ),
+    destroy=extend_schema(
+        summary="Eliminar log de reprogramación",
+        description=f"{_BASE}\n\n**URL:** `DELETE /api/reprogramming_log/{{id}}/`",
+        tags=["Reprogramación"],
+    ),
+)
 class ReprogrammingLogViewSet(ModelViewSet):
     serializer_class = ReprogrammingLogSerializer
     permission_classes = [IsAuthenticated]
@@ -89,6 +582,8 @@ class ReprogrammingLogViewSet(ModelViewSet):
     def get_queryset(self):
         # Solo logs de subtareas pertenecientes al usuario autenticado
         return ReprogrammingLog.objects.filter(subtask__user=self.request.user)
+
+
 class TodayView(APIView):
     """
     Vista "Hoy" - Endpoint para obtener subtareas agrupadas y ordenadas.
@@ -104,8 +599,13 @@ class TodayView(APIView):
     
     @extend_schema(
         summary="Obtener subtareas para la vista 'Hoy'",
-        description="""
-        Endpoint que devuelve subtareas agrupadas y ordenadas según reglas específicas de priorización.
+        description=f"""
+{_BASE}
+
+### URL
+`GET /api/hoy/`
+
+Endpoint que devuelve subtareas agrupadas y ordenadas según reglas específicas de priorización.
         
         ## Funcionalidad
         
@@ -198,7 +698,6 @@ class TodayView(APIView):
                                     'estimated_hours': '2.00',
                                     'target_date': '2026-02-28',
                                     'is_conflicted': False,
-                                    'execution_note': None,
                                     'activity': {
                                         'id': '5c62607b-fa63-4d74-8cc3-ea010b79c9b2',
                                         'title': 'Examen parcial',
@@ -222,7 +721,6 @@ class TodayView(APIView):
                                     'estimated_hours': '1.00',
                                     'target_date': '2026-03-01',
                                     'is_conflicted': False,
-                                    'execution_note': None,
                                     'activity': {
                                         'id': 'b9073b63-e239-47a5-818c-961975153eff',
                                         'title': 'Examen parcial',
@@ -246,7 +744,6 @@ class TodayView(APIView):
                                     'estimated_hours': '1.00',
                                     'target_date': '2026-03-03',
                                     'is_conflicted': False,
-                                    'execution_note': None,
                                     'activity': {
                                         'id': 'aaa3ef81-4f72-431f-a6d8-02e4722ef6e4',
                                         'title': 'Prueba Ordenamiento',
@@ -360,6 +857,7 @@ class TodayView(APIView):
                 request_only=True,
             ),
         ],
+        tags=["Vista Hoy"],
     )
     def get(self, request):
         """
@@ -524,30 +1022,12 @@ class TodayView(APIView):
         # - Primero ordena por target_date (ascendente = más cercanas primero)
         # - Si hay empate en fecha, ordena por estimated_hours (ascendente = menor esfuerzo primero)
         proximas.sort(key=lambda x: (x.target_date, float(x.estimated_hours)))
-        
-        # Serializar los datos
-        serializer = TodaySubtaskSerializer
-        data_vencidas = serializer(vencidas, many=True).data
-        data_para_hoy = serializer(para_hoy, many=True).data
-        data_proximas = serializer(proximas, many=True).data
 
-        # Calcular is_conflicted: días donde la suma de horas supera el límite del usuario
-        try:
-            limite_diario = Decimal(str(user.daily_hours_limit))
-        except (AttributeError, TypeError):
-            limite_diario = Decimal('6.0')
-        date_to_hours = defaultdict(Decimal)
-        for sub in vencidas + para_hoy + proximas:
-            if sub.target_date is not None:
-                date_to_hours[sub.target_date] += sub.estimated_hours
-        overloaded_dates = {d for d, h in date_to_hours.items() if h > limite_diario}
-
-        for i, sub in enumerate(vencidas):
-            data_vencidas[i]['is_conflicted'] = sub.target_date in overloaded_dates
-        for i, sub in enumerate(para_hoy):
-            data_para_hoy[i]['is_conflicted'] = sub.target_date in overloaded_dates
-        for i, sub in enumerate(proximas):
-            data_proximas[i]['is_conflicted'] = sub.target_date in overloaded_dates
+        # Serializar los datos usando el nuevo serializer que calcula is_conflicted automáticamente
+        context = {'request': request}
+        data_vencidas = TodaySubtaskSerializer(vencidas, many=True, context=context).data
+        data_para_hoy = TodaySubtaskSerializer(para_hoy, many=True, context=context).data
+        data_proximas = TodaySubtaskSerializer(proximas, many=True, context=context).data
 
         # Regla de ordenamiento para mostrar en la UI
         regla_ordenamiento = (
@@ -577,6 +1057,35 @@ class TodayStudyTimeView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Tiempo de estudio de hoy (subtareas del día)",
+        description=f"""
+{_BASE}
+
+### URL
+`GET /api/hoy/tiempo/`
+
+Devuelve las subtareas del usuario con **`target_date` = hoy** (solo `status` y `estimated_hours` por ítem).
+        """,
+        responses={
+            200: OpenApiResponse(
+                response=TodayStudyTimeSerializer,
+                description="Array JSON: `status`, `estimated_hours` por subtarea de hoy (puede ser `[]`).",
+                examples=[
+                    OpenApiExample(
+                        "200",
+                        value=[
+                            {"status": "PENDING", "estimated_hours": "2.00"},
+                            {"status": "DONE", "estimated_hours": "1.50"},
+                        ],
+                        response_only=True,
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description="JWT requerido."),
+        },
+        tags=["Vista Hoy"],
+    )
     def get(self, request):
         user = request.user
         today = timezone.localdate()
@@ -601,29 +1110,103 @@ class UpdateSubtaskTargetDateView(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        summary="Modificar fecha o estimación de subtarea (Resuelve Conflictos)",
-        description="""
-        Actualiza `target_date` y/o `estimated_hours` de una subtarea.
-        - `estimated_hours` debe ser mayor a 0.
-        - `target_date` no debe ser anterior a hoy ni superar la fecha límite de la actividad padre.
-        
-        **Tolerancia a conflictos:** Si el cambio excede el límite de horas diarias, se aplica de todas formas (retornando un 200 OK) y se emite un campo `warning` para el frontend con el objeto `daily_load`.
+        summary="Reprogramar subtarea (fecha y/o horas estimadas)",
+        description=f"""
+{_BASE}
+
+### URL
+`PUT /api/subtareas/{{subtask_id}}/`  
+`subtask_id` = UUID de la subtarea (no usa la ruta anidada de actividad).
+
+### Comportamiento
+- Actualiza **`target_date`** y/o **`estimated_hours`** si envías cambios respecto a los valores actuales.
+- **`reason`**: opcional; si cambia la fecha y la subtarea ya tenía `target_date`, se crea un **`ReprogrammingLog`** (`previous_date`, `new_date`, `reason`; por defecto motivo `"Reprogramación manual"`).
+- Si la subtarea estaba **`POSTPONED`**, al guardar pasa a **`PENDING`** (reactivación al reprogramar).
+- **`daily_load`**: carga planificada en el día objetivo (suma de otras subtareas **PENDING** ese día + esta subtarea) frente al **`daily_hours_limit`** del usuario. Solo considera subtareas en estado pendiente para la suma de “vecinas”.
+- Si superas el límite, la operación **igual se aplica** (`200`) y se añade **`warning`** con el texto de conflicto.
+
+### Sin cambios
+Si el body no altera fecha ni horas respecto al estado actual, responde `200` con mensaje `"No se realizaron cambios."` y el mismo `daily_load` calculado.
+
+### Seguridad
+El **`subtask_id`** del path debe corresponder a una subtarea **del usuario autenticado**. Si el id no existe o pertenece a otro usuario → **404** (`Not found`).
         """,
+        parameters=[
+            OpenApiParameter(
+                name="pk",
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                required=True,
+                description="UUID de la subtarea (solo si es del usuario autenticado).",
+            ),
+        ],
         request={
             "application/json": {
                 "type": "object",
                 "properties": {
                     "target_date": {"type": "string", "format": "date", "description": "Nueva fecha objetivo (YYYY-MM-DD)"},
-                    "estimated_hours": {"type": "number", "format": "float", "description": "Nuevas horas estimadas"},
-                    "reason": {"type": "string", "description": "Motivo de la reprogramación"}
-                }
+                    "estimated_hours": {"type": "number", "format": "float", "description": "Nuevas horas estimadas (> 0)"},
+                    "reason": {"type": "string", "description": "Motivo de la reprogramación (opcional)"},
+                },
             }
         },
         responses={
-            200: OpenApiResponse(description="Éxito, podría incluir `warning` si hay sobrecarga y `daily_load`."),
-            400: OpenApiResponse(description="Error de validación sobre los parámetros."),
-            404: OpenApiResponse(description="Subtarea no encontrada para el usuario provisto.")
-        }
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Subtarea actualizada (o sin cambios). Incluye campos del serializer de subtarea más `message`, `daily_load` y opcionalmente `warning`.",
+                examples=[
+                    OpenApiExample(
+                        "200 — éxito con posible warning",
+                        value={
+                            "id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b",
+                            "title": "Resolver guía",
+                            "status": "PENDING",
+                            "estimated_hours": "2.00",
+                            "target_date": "2026-03-25",
+                            "message": "Subtarea actualizada correctamente.",
+                            "daily_load": {
+                                "current_hours": 7.0,
+                                "limit": 6.0,
+                                "has_conflict": True,
+                                "exceeded_by": 1.0,
+                            },
+                            "warning": "Conflicto de sobrecarga. Quedarías con 7.0h planificadas (límite 6.0h).",
+                        },
+                        response_only=True,
+                    ),
+                    OpenApiExample(
+                        "200 — sin cambios",
+                        value={
+                            "id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b",
+                            "title": "Resolver guía",
+                            "message": "No se realizaron cambios.",
+                            "daily_load": {
+                                "current_hours": 4.0,
+                                "limit": 6.0,
+                                "has_conflict": False,
+                                "exceeded_by": 0,
+                            },
+                        },
+                        response_only=True,
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description="Validación fallida (fecha pasada, formato, horas ≤ 0, fecha posterior al deadline de la actividad, etc.).",
+                examples=[
+                    OpenApiExample(
+                        "Fecha inválida",
+                        value={"error": "La fecha no puede ser anterior a hoy."},
+                        response_only=True,
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description="Subtarea inexistente o el id no pertenece al usuario autenticado.",
+                examples=[OpenApiExample("No encontrada o no autorizada", value={"detail": "Not found."}, response_only=True)],
+            ),
+        },
+        tags=["Subtareas"],
     )
     def put(self, request, pk):
         # Valida que la tarea sea del usuario logueado
@@ -724,6 +1307,10 @@ class UpdateSubtaskTargetDateView(APIView):
         old_date = subtask.target_date
         if target_date:
             subtask.target_date = target_date
+        
+        if subtask.status == Subtask.Status.POSPUESTO:
+            subtask.status = Subtask.Status.PENDIENTE
+            
         subtask.save()
 
         # Crear log solo si ya tenía fecha (previous_date es obligatorio en el modelo)
@@ -758,10 +1345,28 @@ class ConfiguracionView(APIView):
 
     @extend_schema(
         summary="Obtener configuración de usuario",
-        description="Retorna el límite de horas planificables por día `daily_hours_limit` del usuario.",
+        description=f"""
+{_BASE}
+
+### URL
+`GET /api/configuracion/`
+
+Retorna el límite de horas planificables por día **`daily_hours_limit`** del usuario.
+        """,
         responses={
-            200: OpenApiResponse(description="Devuelve el límite actual del usuario.")
-        }
+            200: OpenApiResponse(
+                description="Límite actual.",
+                examples=[
+                    OpenApiExample(
+                        "200",
+                        value={"daily_hours_limit": 6.0},
+                        response_only=True,
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description="JWT requerido."),
+        },
+        tags=["Configuración"],
     )
     def get(self, request):
         user = request.user
@@ -771,7 +1376,14 @@ class ConfiguracionView(APIView):
 
     @extend_schema(
         summary="Actualizar configuración de usuario",
-        description="Permite al usuario ajustar su `daily_hours_limit` con un valor entre 0.5 y 24.0.",
+        description=f"""
+{_BASE}
+
+### URL
+`PUT /api/configuracion/`
+
+Permite ajustar **`daily_hours_limit`** entre **0.5** y **24.0** (horas planificables por día).
+        """,
         request={
             "application/json": {
                 "type": "object",
@@ -781,10 +1393,33 @@ class ConfiguracionView(APIView):
                 "required": ["daily_hours_limit"]
             }
         },
+        examples=[
+            OpenApiExample("Request", value={"daily_hours_limit": 8.0}, request_only=True),
+        ],
         responses={
-            200: OpenApiResponse(description="Configuración actualizada con éxito."),
-            400: OpenApiResponse(description="Límite faltante, inválido o fuera del rango aceptado.")
-        }
+            200: OpenApiResponse(
+                description="Configuración actualizada.",
+                examples=[
+                    OpenApiExample(
+                        "200",
+                        value={"daily_hours_limit": 8.0, "message": "Configuración actualizada correctamente."},
+                        response_only=True,
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description="Límite faltante, inválido o fuera de rango.",
+                examples=[
+                    OpenApiExample(
+                        "Error de rango",
+                        value={"error": "El límite de horas debe ser un valor entre 0.5 y 24.0."},
+                        response_only=True,
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description="JWT requerido."),
+        },
+        tags=["Configuración"],
     )
     def put(self, request):
         user = request.user
@@ -827,24 +1462,67 @@ class SubtaskCalendarView(APIView):
 
     @extend_schema(
         summary="Consultar disponibilidad en el calendario (1 semana)",
-        description="""
-        Devuelve un calendario de 7 días (Lunes a Domingo) de la semana de una fecha dada.
-        En cada día, incluye las tareas planeadas e indica si la subtarea solicitada "cabe" (`fits: true|false`).
-        Muestra la razón (`reason`) si no cabe (ej: fecha pasada, excede límite de actividad, o resulta en sobrecarga).
+        description=f"""
+{_BASE}
+
+### URL
+`GET /api/subtareas/{{subtask_id}}/calendar/?date=YYYY-MM-DD`  
+- `date` (query, opcional): semana que contiene esa fecha; si se omite, usa la semana de **hoy**.
+
+Devuelve **7 días** (lunes–domingo). Por día: tareas planificadas (`PENDING`), carga y si la subtarea del path **cabría** (`fits`) con su `estimated_hours`, más `reason` si no cabe (fecha pasada, deadline de actividad, evento o sobrecarga diaria).
+
+### Seguridad
+**`subtask_id`** del path debe ser una subtarea **del usuario autenticado**; en caso contrario → **404**.
         """,
         parameters=[
+            OpenApiParameter(
+                name='pk',
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                required=True,
+                description='UUID de la subtarea a evaluar (solo si es del usuario autenticado).',
+            ),
             OpenApiParameter(
                 name='date',
                 type=str,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='Fecha pivote para calcular la semana (formato YYYY-MM-DD). Si no se pasa, asume hoy.',
+                description='Fecha pivote para calcular la semana (YYYY-MM-DD). Si no se pasa, asume hoy.',
             )
         ],
         responses={
-            200: OpenApiResponse(description="Estructura del calendario semanal, con lista de tareas por día y evaluación de factibilidad."),
-            404: OpenApiResponse(description="Subtarea no existe o acceso denegado.")
-        }
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Resumen de subtarea + rango de semana + `calendar` por día.",
+                examples=[
+                    OpenApiExample(
+                        "200 — fragmento",
+                        value={
+                            "subtask": {"id": "01b73f4a-8805-49f5-8b8e-03aa702d7a6b", "title": "Estudiar", "estimated_hours": 2.0},
+                            "start_date": "2026-03-17",
+                            "end_date": "2026-03-23",
+                            "calendar": [
+                                {
+                                    "date": "2026-03-17",
+                                    "tasks": [],
+                                    "fits": True,
+                                    "reason": "",
+                                    "current_load": 0.0,
+                                    "limit": 6.0,
+                                },
+                            ],
+                        },
+                        response_only=True,
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description="Subtarea inexistente o el id no pertenece al usuario autenticado.",
+                examples=[OpenApiExample("No encontrada o no autorizada", value={"detail": "Not found."}, response_only=True)],
+            ),
+            401: OpenApiResponse(description="JWT requerido."),
+        },
+        tags=["Subtareas"],
     )
     def get(self, request, pk):
         from django.shortcuts import get_object_or_404
