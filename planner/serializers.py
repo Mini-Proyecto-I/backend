@@ -244,8 +244,9 @@ class SubtaskSerializer(serializers.ModelSerializer):
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
             "target_date", "order", "is_conflicted",
+            "posponed_note",
         ]
-        read_only_fields = ["id", "activity"]
+        read_only_fields = ["id", "activity", "posponed_note"]
 
     def get_is_conflicted(self, obj):
         if obj.status == "DONE":

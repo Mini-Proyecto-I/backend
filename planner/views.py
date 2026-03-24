@@ -322,6 +322,19 @@ class SubtaskViewSet(ModelViewSet):
             queryset = queryset.filter(activity_id=activity_id)
         return queryset
 
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Obtiene una subtarea por id y expone explícitamente si está pospuesta.
+        """
+        subtask = self.get_object()
+        serializer = self.get_serializer(subtask)
+        data = dict(serializer.data)
+        if subtask.status == Subtask.Status.POSPUESTO:
+            ultimo_log = subtask.posponed_logs.order_by("-created_at").first()
+            data["posponed_note"] = ultimo_log.note if ultimo_log else None
+
+        return Response(data)
+
     def perform_create(self, serializer):
         activity_id = self.kwargs.get("activity_pk")
         activity = Activity.objects.filter(id=activity_id, user=self.request.user).first()
