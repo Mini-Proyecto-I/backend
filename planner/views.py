@@ -342,6 +342,24 @@ class SubtaskViewSet(ModelViewSet):
             raise NotFound("Actividad no encontrada o no tienes permisos.")
         serializer.save(user=self.request.user, activity=activity)
 
+    def perform_update(self, serializer):
+        # Capturamos la fecha actual de la instancia antes de que el serializer la actualice
+        old_date = serializer.instance.target_date
+        
+        # Guardamos los cambios
+        updated_instance = serializer.save()
+        new_date = updated_instance.target_date
+        
+        # Si la fecha cambió y ya tenía una fecha previa registrada, creamos un log de reprogramación
+        if old_date is not None and new_date is not None and old_date != new_date:
+            reason = self.request.data.get("reason", "Reprogramación manual")
+            ReprogrammingLog.objects.create(
+                subtask=updated_instance,
+                previous_date=old_date,
+                new_date=new_date,
+                reason=reason
+            )
+
     @extend_schema(
         summary="Posponer una subtarea",
         description=f"""
@@ -595,6 +613,37 @@ class ReprogrammingLogViewSet(ModelViewSet):
     def get_queryset(self):
         # Solo logs de subtareas pertenecientes al usuario autenticado
         return ReprogrammingLog.objects.filter(subtask__user=self.request.user)
+
+    @extend_schema(
+        summary="Logs de reprogramación de una subtarea",
+        description=f"""
+{_BASE}
+
+Verifica que **`subtask_id`** sea un UUID válido y que la subtarea **exista y pertenezca al usuario autenticado**.
+        """,
+        parameters=[
+            OpenApiParameter(
+                name="subtask_id",
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                required=True,
+                description="UUID de la subtarea (debe ser del usuario autenticado).",
+            ),
+        ],
+        responses={200: ReprogrammingLogSerializer(many=True)},
+        tags=["Reprogramación"],
+    )
+    @action(detail=False, methods=['get'], url_path='notes-of-subtask/(?P<subtask_id>[^/.]+)')
+    def get_notes_of_subtask(self, request, *args, **kwargs):
+        subtask_id = self.kwargs.get('subtask_id')
+        try:
+            UUID(str(subtask_id))
+        except ValueError:
+            raise ValidationError({'subtask_id': 'Debe ser un UUID válido.'})
+        get_object_or_404(Subtask, id=subtask_id, user=request.user)
+        logs = self.get_queryset().filter(subtask_id=subtask_id).order_by('-created_at')
+        serializer = self.get_serializer(logs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class TodayView(APIView):
