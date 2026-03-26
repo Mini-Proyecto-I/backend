@@ -324,16 +324,11 @@ class SubtaskViewSet(ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         """
-        Obtiene una subtarea por id y expone explícitamente si está pospuesta.
+        Obtiene una subtarea por id y expone su información detallada.
         """
-        subtask = self.get_object()
-        serializer = self.get_serializer(subtask)
-        data = dict(serializer.data)
-        if subtask.status == Subtask.Status.POSPUESTO:
-            ultimo_log = subtask.posponed_logs.order_by("-created_at").first()
-            data["posponed_note"] = ultimo_log.note if ultimo_log else None
-
-        return Response(data)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         activity_id = self.kwargs.get("activity_pk")
@@ -1184,7 +1179,7 @@ class UpdateSubtaskTargetDateView(APIView):
 - Actualiza **`target_date`** y/o **`estimated_hours`** si envías cambios respecto a los valores actuales.
 - **`reason`**: opcional; si cambia la fecha y la subtarea ya tenía `target_date`, se crea un **`ReprogrammingLog`** (`previous_date`, `new_date`, `reason`; por defecto motivo `"Reprogramación manual"`).
 - Si la subtarea estaba **`POSTPONED`**, al guardar pasa a **`PENDING`** (reactivación al reprogramar).
-- **`daily_load`**: carga planificada en el día objetivo (suma de otras subtareas **PENDING** ese día + esta subtarea) frente al **`daily_hours_limit`** del usuario. Solo considera subtareas en estado pendiente para la suma de “vecinas”.
+- **`daily_load`**: carga planificada en el día objetivo (suma de otras subtareas NO completadas ese día + esta subtarea) frente al **`daily_hours_limit`** del usuario. Solo considera subtareas en estado pendiente, en espera o pospuestas para la suma de “vecinas”.
 - Si superas el límite, la operación **igual se aplica** (`200`) y se añade **`warning`** con el texto de conflicto.
 
 ### Sin cambios
@@ -1329,9 +1324,8 @@ El **`subtask_id`** del path debe corresponder a una subtarea **del usuario aute
 
         carga_data = Subtask.objects.filter(
             user=request.user,
-            target_date=date_to_check,
-            status='PENDING'
-        ).exclude(id=subtask.id).aggregate(total=Sum('estimated_hours'))
+            target_date=date_to_check
+        ).exclude(status=Subtask.Status.REALIZADO).exclude(id=subtask.id).aggregate(total=Sum('estimated_hours'))
 
         carga_actual = carga_data['total'] or Decimal('0')
 
@@ -1617,9 +1611,8 @@ Devuelve **7 días** (lunes–domingo). Por día: tareas planificadas (`PENDING`
         tasks_in_week = Subtask.objects.filter(
             user=request.user,
             target_date__gte=start_of_week,
-            target_date__lte=end_of_week,
-            status='PENDING'
-        ).select_related('activity')
+            target_date__lte=end_of_week
+        ).exclude(status=Subtask.Status.REALIZADO).select_related('activity')
         
         tasks_by_day = {start_of_week + timedelta(days=i): [] for i in range(7)}
         for t in tasks_in_week:
