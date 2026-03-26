@@ -1352,11 +1352,12 @@ El **`subtask_id`** del path debe corresponder a una subtarea **del usuario aute
         
         # Validar si hay cambios reales
         if not has_date_change and not has_hours_change:
-            serializer = SubtaskSerializer(subtask)
+            serializer = SubtaskSerializer(subtask, context={'request': request})
             return Response({
                 **serializer.data,
                 "message": "No se realizaron cambios.",
-                "daily_load": daily_load
+                "daily_load": daily_load,
+                "is_conflicted": daily_load["has_conflict"]
             }, status=status.HTTP_200_OK)
 
         # Guardar cambios
@@ -1380,10 +1381,11 @@ El **`subtask_id`** del path debe corresponder a una subtarea **del usuario aute
             )
 
         # Retornar respuesta
-        serializer = SubtaskSerializer(subtask)
+        serializer = SubtaskSerializer(subtask, context={'request': request})
         response_data = {
             **serializer.data,
             "daily_load": daily_load,
+            "is_conflicted": daily_load["has_conflict"],
             "message": "Subtarea actualizada correctamente."
         }
 
