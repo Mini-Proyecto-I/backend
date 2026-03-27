@@ -54,13 +54,19 @@ class CourseSerializer(serializers.ModelSerializer):
 
 class SubtaskSimpleSerializer(serializers.ModelSerializer):
     is_conflicted = serializers.SerializerMethodField()
-
+    posponed_note = serializers.SerializerMethodField()
     class Meta:
         model = Subtask
         fields = [
             "id", "title", "status", "estimated_hours",
-            "target_date", "order", "is_conflicted",
+            "target_date", "order", "is_conflicted", "posponed_note"
         ]
+
+    def get_posponed_note(self, obj):
+        if obj.status == "POSTPONED":
+            ultimo_log = obj.posponed_logs.order_by("-created_at").first()
+            return ultimo_log.note if ultimo_log else None
+        return None
 
     def get_is_conflicted(self, obj):
         if obj.status == "DONE":
@@ -231,6 +237,7 @@ class ActivitySerializer(serializers.ModelSerializer):
 class SubtaskSerializer(serializers.ModelSerializer):
     activity = ActivitySerializer(read_only=True)
     is_conflicted = serializers.SerializerMethodField()
+    posponed_note = serializers.SerializerMethodField()
 
     title = serializers.CharField(
         max_length=100,
@@ -244,8 +251,9 @@ class SubtaskSerializer(serializers.ModelSerializer):
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
             "target_date", "order", "is_conflicted",
+            "posponed_note",
         ]
-        read_only_fields = ["id", "activity"]
+        read_only_fields = ["id", "activity", "posponed_note"]
 
     def get_is_conflicted(self, obj):
         if obj.status == "DONE":
@@ -280,6 +288,13 @@ class SubtaskSerializer(serializers.ModelSerializer):
             request._overloaded_dates = {l['target_date'] for l in loads}
             
         return target_date in request._overloaded_dates
+
+    def get_posponed_note(self, obj):
+        if obj.status == "POSTPONED":
+            ultimo_log = obj.posponed_logs.order_by("-created_at").first()
+            return ultimo_log.note if ultimo_log else None
+        return None
+
 
     def validate_title(self, value):
         if not value or not value.strip():
@@ -352,7 +367,7 @@ class TodaySubtaskSerializer(SubtaskSerializer):
     class Meta(SubtaskSerializer.Meta):
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
-            "target_date", "is_conflicted",
+            "target_date", "is_conflicted", "posponed_note", "order",
         ]
 
 
