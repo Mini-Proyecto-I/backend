@@ -54,13 +54,19 @@ class CourseSerializer(serializers.ModelSerializer):
 
 class SubtaskSimpleSerializer(serializers.ModelSerializer):
     is_conflicted = serializers.SerializerMethodField()
-
+    posponed_note = serializers.SerializerMethodField()
     class Meta:
         model = Subtask
         fields = [
             "id", "title", "status", "estimated_hours",
-            "target_date", "order", "is_conflicted",
+            "target_date", "order", "is_conflicted", "posponed_note"
         ]
+
+    def get_posponed_note(self, obj):
+        if obj.status == "POSTPONED":
+            ultimo_log = obj.posponed_logs.order_by("-created_at").first()
+            return ultimo_log.note if ultimo_log else None
+        return None
 
     def get_is_conflicted(self, obj):
         if obj.status == "DONE":
