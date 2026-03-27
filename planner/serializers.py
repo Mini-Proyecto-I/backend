@@ -361,7 +361,7 @@ class TodaySubtaskSerializer(SubtaskSerializer):
     class Meta(SubtaskSerializer.Meta):
         fields = [
             "id", "title", "activity", "status", "estimated_hours",
-            "target_date", "is_conflicted",
+            "target_date", "is_conflicted", "posponed_note", "order",
         ]
 
 
