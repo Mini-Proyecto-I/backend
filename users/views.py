@@ -157,15 +157,24 @@ class UserViewSet(ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        
+
+        # Mismos tokens que en POST /api/auth/token/ (evita segundo login que puede fallar
+        # con tokens viejos en el cliente y deja la cuenta huérfana en la BD).
+        refresh = CustomTokenObtainPairSerializer.get_token(user)
+        tokens = {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+        }
+
         # Preparar respuesta sin incluir la contraseña
         response_serializer = self.get_serializer(user)
-        
+
         return Response(
             {
                 'success': True,
                 'message': 'Usuario creado exitosamente.',
-                'data': response_serializer.data
+                'data': response_serializer.data,
+                'tokens': tokens,
             },
             status=status.HTTP_201_CREATED
         )
