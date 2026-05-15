@@ -46,6 +46,83 @@ _SUBTASK_NESTED_SECURITY = (
     "Si el `id` de la subtarea no existe, es de otro usuario o no pertenece a esa actividad → **404**."
 )
 
+_SUBTASK_EDIT_INTRO = (
+    "### Cambio reciente\n"
+    "Si el cuerpo incluye el campo **`title`**, el servidor comprueba que **ninguna otra subtarea** "
+    "de la **misma actividad** tenga ya **exactamente** ese texto: la comparación **distingue mayúsculas "
+    "y minúsculas** (por ejemplo, `Leer` y `leer` son títulos distintos). La subtarea que se está editando "
+    "**se excluye** de la búsqueda, de modo que puedes guardar sin cambiar el título. Si hay conflicto → "
+    "**400** y el error aparece bajo la clave **`title`**.\n\n"
+)
+
+_SUBTASK_EDIT_VALIDATIONS = (
+    "### Validaciones\n"
+    "- **`title`** (si se envía): no vacío; máximo **100** caracteres; **único por actividad** "
+    "entre subtareas distintas (**comparación exacta**, distingue mayúsculas).\n"
+    "- **`estimated_hours`** (si se envía): debe ser **> 0**.\n"
+    "- **Límite diario de horas** (si la subtarea tiene **`target_date`** y el estado resultante no es **`DONE`**): "
+    "la suma de horas estimadas de todas las subtareas **del mismo usuario** en esa fecha "
+    "(excluyendo `DONE` y excluyendo la fila actual al recalcular) más las horas de esta subtarea "
+    "no puede superar **`daily_hours_limit`** del usuario.\n"
+    "- Si el estado pasa a **`DONE`**, no se aplica la validación del límite diario.\n\n"
+)
+
+_SUBTASK_EDIT_IO = (
+    "### Entrada\n"
+    "- **`PATCH`**: JSON parcial; solo los campos enviados se validan y actualizan.\n"
+    "- **`PUT`**: JSON con la representación completa de los campos editables (mismo serializer).\n"
+    "- Campos típicos: `title`, `estimated_hours`, `target_date`, `status`, `order`.\n"
+    "- **`title`**: al enviarlo, se eliminan espacios al inicio y al final (`strip`); la unicidad en la "
+    "actividad se compara contra el valor ya normalizado, con **igualdad exacta** (sensible a mayúsculas).\n"
+    "- `activity` es de solo lectura en la respuesta (no se reasigna por este endpoint).\n\n"
+    "### Salida\n"
+    "- **`200 OK`**: cuerpo = objeto **`Subtask`** serializado (incluye `activity` anidada, `is_conflicted`, "
+    "`posponed_note`, etc.).\n"
+    "- **`400`**: errores de validación (objeto con claves de campo o `non_field_errors`).\n"
+    "- **`401`**: no autenticado.\n"
+    "- **`404`**: subtarea o combinación actividad/subtarea no válida para el usuario.\n\n"
+)
+
+_SUBTASK_EDIT_EXAMPLE = (
+    "### Ejemplo\n"
+    "1. Petición `PATCH /api/activity/3fa85f64-5717-4562-b3fc-2c963f66afa6/subtasks/"
+    "6ba7b810-9dad-11d1-80b4-00c04fd430c8/` con cabecera `Authorization: Bearer …` y cuerpo:\n"
+    "```json\n"
+    '{ "title": "Repasar tema 3", "estimated_hours": 2.5 }\n'
+    "```\n"
+    "2. **Duplicado exacto (misma cadena, misma capitalización):** si otra subtarea de esa actividad ya "
+    "se llama exactamente `Repasar tema 3`, respuesta **400**:\n"
+    "```json\n"
+    '{ "title": ["Ya existe una subtarea con este título en la misma actividad."] }\n'
+    "```\n"
+    "3. **Misma frase, distinta capitalización:** si la otra subtarea se llama `repasar tema 3` (solo "
+    "cambia mayúsculas/minúsculas) y envías `Repasar tema 3`, **no** hay conflicto → **200** (la regla es "
+    "comparación **literal** / case-sensitive).\n"
+    "4. Si no hay duplicado exacto y el día no supera el límite de horas, respuesta **200** con el objeto "
+    "actualizado (misma forma que en `GET` de la subtarea).\n"
+)
+
+_SUBTASK_PATCH_DOC = (
+    f"{_BASE}\n\n**URL:** `PATCH /api/activity/{{activity_id}}/subtasks/{{id}}/`\n\n"
+    f"{_SUBTASK_EDIT_INTRO}"
+    f"{_SUBTASK_EDIT_VALIDATIONS}"
+    f"{_SUBTASK_EDIT_IO}"
+    f"{_SUBTASK_EDIT_EXAMPLE}"
+    f"{_SUBTASK_NESTED_SECURITY}"
+)
+
+_SUBTASK_PUT_DOC = (
+    f"{_BASE}\n\n**URL:** `PUT /api/activity/{{activity_id}}/subtasks/{{id}}/`\n\n"
+    "**Nota:** Sustituye todos los campos obligatorios del serializer; misma validación que `PATCH` "
+    "(título único por actividad con **comparación exacta** / case-sensitive, horas > 0, límite diario cuando "
+    "aplica).\n\n"
+    f"{_SUBTASK_EDIT_INTRO}"
+    f"{_SUBTASK_EDIT_VALIDATIONS}"
+    f"{_SUBTASK_EDIT_IO}"
+    f"{_SUBTASK_EDIT_EXAMPLE}"
+    f"{_SUBTASK_NESTED_SECURITY}"
+)
+
 
 @extend_schema_view(
     list=extend_schema(
@@ -293,13 +370,55 @@ Devuelve el detalle de una actividad perteneciente **al usuario autenticado**,
     ),
     update=extend_schema(
         summary="Reemplazar subtarea",
-        description=f"{_BASE}\n\n**URL:** `PUT /api/activity/{{activity_id}}/subtasks/{{id}}/`{_SUBTASK_NESTED_SECURITY}",
+        description=_SUBTASK_PUT_DOC,
         tags=["Subtareas"],
+        request=SubtaskSerializer,
+        responses={
+            200: SubtaskSerializer,
+            400: OpenApiResponse(
+                description="Validación fallida (título duplicado en la actividad, horas, límite diario, etc.).",
+            ),
+            401: OpenApiResponse(description="No autenticado (JWT inválido o ausente)."),
+            404: OpenApiResponse(description="Subtarea no encontrada o no pertenece al usuario/actividad del path."),
+        },
+        examples=[
+            OpenApiExample(
+                "PUT — cuerpo de ejemplo (título y horas)",
+                value={"title": "Repasar tema 3", "estimated_hours": 2.5},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "400 — título duplicado en la actividad",
+                value={"title": ["Ya existe una subtarea con este título en la misma actividad."]},
+                response_only=True,
+            ),
+        ],
     ),
     partial_update=extend_schema(
         summary="Actualizar subtarea (parcial)",
-        description=f"{_BASE}\n\n**URL:** `PATCH /api/activity/{{activity_id}}/subtasks/{{id}}/`{_SUBTASK_NESTED_SECURITY}",
+        description=_SUBTASK_PATCH_DOC,
         tags=["Subtareas"],
+        request=SubtaskSerializer,
+        responses={
+            200: SubtaskSerializer,
+            400: OpenApiResponse(
+                description="Validación fallida (título duplicado en la actividad, horas, límite diario, etc.).",
+            ),
+            401: OpenApiResponse(description="No autenticado (JWT inválido o ausente)."),
+            404: OpenApiResponse(description="Subtarea no encontrada o no pertenece al usuario/actividad del path."),
+        },
+        examples=[
+            OpenApiExample(
+                "PATCH — actualizar título y horas",
+                value={"title": "Repasar tema 3", "estimated_hours": 2.5},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "400 — título duplicado en la actividad",
+                value={"title": ["Ya existe una subtarea con este título en la misma actividad."]},
+                response_only=True,
+            ),
+        ],
     ),
     destroy=extend_schema(
         summary="Eliminar subtarea",

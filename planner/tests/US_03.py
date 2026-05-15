@@ -217,6 +217,51 @@ class US03SubtaskUpdateDeleteTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("estimated_hours", response.data)
 
+    def test_patch_subtask_duplicate_title_same_activity_returns_400(self):
+        """No se puede renombrar una subtarea al título de otra en la misma actividad."""
+        other = Subtask.objects.create(
+            user=self.user,
+            activity=self.activity,
+            title="Nombre único existente",
+            status=Subtask.Status.PENDIENTE,
+            estimated_hours=1.00,
+        )
+        response = self.client.patch(
+            f"{self.base_url}{self.subtask.id}/",
+            {"title": "Nombre único existente"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("title", response.data)
+
+    def test_patch_subtask_same_title_different_case_allowed(self):
+        """Con comparación sensible a mayúsculas, otro título distinto solo en casing no bloquea."""
+        Subtask.objects.create(
+            user=self.user,
+            activity=self.activity,
+            title="Lectura capítulo 1",
+            status=Subtask.Status.PENDIENTE,
+            estimated_hours=1.00,
+        )
+        response = self.client.patch(
+            f"{self.base_url}{self.subtask.id}/",
+            {"title": "LECTURA CAPÍTULO 1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["title"], "LECTURA CAPÍTULO 1")
+
+    def test_patch_subtask_same_title_as_self_succeeds(self):
+        """Mantener el mismo título (sin colisión con otra subtarea) devuelve 200."""
+        response = self.client.patch(
+            f"{self.base_url}{self.subtask.id}/",
+            {"title": self.subtask.title, "estimated_hours": "2.5"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.subtask.refresh_from_db()
+        self.assertEqual(float(self.subtask.estimated_hours), 2.5)
+
 
 class US03ActivitySubtaskCascadeTests(TestCase):
     """Integridad: eliminar una actividad elimina sus subtareas (CASCADE)."""
