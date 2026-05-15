@@ -329,6 +329,19 @@ class SubtaskSerializer(serializers.ModelSerializer):
             "estimated_hours", getattr(self.instance, "estimated_hours", 0)
         )
 
+        # Unicidad del título dentro de la misma actividad (solo si se envía título en esta petición).
+        if activity and "title" in data:
+            title_clean = data["title"]
+            dup_qs = Subtask.objects.filter(activity=activity, title=title_clean)
+            if self.instance:
+                dup_qs = dup_qs.exclude(pk=self.instance.pk)
+            if dup_qs.exists():
+                raise serializers.ValidationError(
+                    {
+                        "title": "Ya existe una subtarea con este título en la misma actividad."
+                    }
+                )
+
         # Si marcamos como DONE, no aplicamos validación de límite de horas.
         # Las tareas realizadas ya no ocupan espacio en la planificación.
         if new_status == "DONE":
