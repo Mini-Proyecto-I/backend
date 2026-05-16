@@ -153,6 +153,7 @@ class ActivitySerializer(serializers.ModelSerializer):
     def validate(self, data):
         event_datetime = data.get("event_datetime")
         deadline = data.get("deadline")
+        deadline_changed = "deadline" in data
         title = data.get("title")
         # Si no se proporciona title en la actualización, usar el de la instancia
         if title is None and self.instance:
@@ -206,6 +207,27 @@ class ActivitySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "deadline": "La fecha límite de la actividad no puede ser anterior a la actual."
             })
+
+        # En edición de actividad, solo validar subtareas vs deadline cuando el deadline cambie.
+        # Esto evita bloquear cambios de nombre/curso/tipo/fecha adicional/descripción por conflictos de horas.
+        if self.instance and deadline_changed and deadline:
+            subtask_out_of_range = (
+                Subtask.objects.filter(
+                    activity=self.instance,
+                    target_date__isnull=False,
+                    target_date__gt=deadline,
+                )
+                .order_by("target_date")
+                .first()
+            )
+
+            if subtask_out_of_range:
+                raise serializers.ValidationError({
+                    "deadline": (
+                        "La fecha de entrega no puede ser anterior a una subtarea ya creada "
+                        f"({subtask_out_of_range.title}: {subtask_out_of_range.target_date})."
+                    )
+                })
 
         return data
 
